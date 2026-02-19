@@ -7,6 +7,12 @@ import config
 from config import G_CONST, R_AIR, R_EARTH, OUTPUT_DIR
 
 file_list = config.get_file_list()
+print(f"file_list:  '{file_list}'")
+
+experiment_name = config.get_experiment_name()
+
+
+print(f"experiment name:  '{experiment_name}'")
 
 def get_units(data_array):
     """Safely retrieves units attribute from a DataArray."""
@@ -59,7 +65,7 @@ try:
         air_mass_cell = (dp_pa / G_CONST) * cell_area_2d
         
         cell_volume = None
-        if 'SULFMD' in ds.data_vars and 'T' in ds.data_vars:
+        if 'VOLCHZMD' in ds.data_vars and 'T' in ds.data_vars:
             cell_height_dz = (dp_pa * R_AIR * ds['T']) / (mid_pressure_pa * G_CONST)
             cell_volume = cell_area_2d * cell_height_dz
 
@@ -78,18 +84,18 @@ try:
         variables_to_plot['H2SO4'] = compute_mass_ts('H2SO4', air_mass_cell)
         variables_to_plot['Q'] = compute_mass_ts('Q', air_mass_cell)
         
-        if 'SULFMD' in ds.data_vars and cell_volume is not None:
-            # Convert SULFMD from g/cm3 to kg/m3 (*1000)
-            variables_to_plot['SULFMD'] = compute_mass_ts('SULFMD', cell_volume * 1000.0)
+        if 'VOLCHZMD' in ds.data_vars and cell_volume is not None:
+            # Convert VOLCHZMD from g/cm3 to kg/m3 (*1000)
+            variables_to_plot['VOLCHZMD'] = compute_mass_ts('VOLCHZMD', cell_volume * 1000.0)
 
         # Filter missing
         variables_to_plot = {k: v for k, v in variables_to_plot.items() if v is not None}
 
         # Sum Sulfur components
-        s_vars = ['SO2', 'H2SO4', 'SULFMD']
+        s_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
         available_s = [variables_to_plot[v] for v in s_vars if v in variables_to_plot]
         if available_s:
-            variables_to_plot['Total Sulfur (SO2+H2SO4+SULFMD)'] = sum(available_s)
+            variables_to_plot['Total Sulfur (SO2+H2SO4+VOLCHZMD)'] = sum(available_s)
 
         # --- 4. Plotting Logic ---
         print("Generating plots...")
@@ -105,7 +111,7 @@ try:
                 return da, ds['time'].attrs.get('units', 'time')
 
         if variables_to_plot:
-            plot_order = ['SO2', 'H2SO4', 'SULFMD', 'Total Sulfur (SO2+H2SO4+SULFMD)', 'Q']
+            plot_order = ['SO2', 'H2SO4', 'VOLCHZMD', 'Total Sulfur (SO2+H2SO4+VOLCHZMD)', 'Q']
             ordered_keys = [k for k in plot_order if k in variables_to_plot]
             
             fig, axes = plt.subplots(nrows=len(ordered_keys), ncols=1, figsize=(12, len(ordered_keys)*3), sharex=True)
@@ -121,7 +127,9 @@ try:
             
             axes[-1].set_xlabel(time_label)
             plt.tight_layout()
-            plt.savefig(os.path.join(OUTPUT_DIR, 'plot_5_global_mass_timeseries.png'))
+            filename = f"{experiment_name}.global_mean_timeseries_v1.png"
+            save_fig1 = os.path.join(OUTPUT_DIR, filename)
+            plt.savefig(save_fig1)
             plt.close()
 
         # --- 5. Global Mean TS ---
@@ -147,7 +155,9 @@ try:
             
             axes[-1].set_xlabel(time_label)
             plt.tight_layout()
-            plt.savefig(os.path.join(OUTPUT_DIR, 'plot_6_global_mean_timeseries.png'))
+            filename = f"{experiment_name}.global_mean_timeseries_v2.png"
+            save_fig2 = os.path.join(OUTPUT_DIR, filename)
+            plt.savefig(save_fig2)
             plt.close()
 
 except Exception as e:

@@ -1,27 +1,35 @@
 import os
 import glob
+import sys
 
 # --- !! USER CONFIGURATION !! ---
 
 # 1. Path configuration
 # Set your root directory here
-ROOT_DIR = '/Users/wolfe/Desktop/projects/volcanos/runs'
+ROOT_DIR = '/Users/wolfe/Desktop/projects/volcanos/runs/'
+FOLDER= 'hab2_vei7/'
 
 # Set the filename pattern here (can be a single string or a list of strings)
-FILE_PATTERN = [
-    'eruption_test_land.cam.h1.0001-01-01-00000.nc',
-    'eruption_test_land.cam.h1.0001-04-11-00000.nc',
-    'eruption_test_land.cam.h1.0001-07-20-00000.nc',
-    'eruption_test_land.cam.h1.0001-10-28-00000.nc',
-    'eruption_test_land.cam.h1.0002-02-05-00000.nc',
-    'eruption_test_land.cam.h1.0002-05-16-00000.nc',
-    'eruption_test_land.cam.h1.0002-08-24-00000.nc',
-    'eruption_test_land.cam.h1.0002-12-02-00000.nc',
-    'eruption_test_land.cam.h1.0003-03-12-00000.nc',
-    'eruption_test_land.cam.h1.0003-06-20-00000.nc',
-    'eruption_test_land.cam.h1.0003-09-28-00000.nc'
-]
+#FILE_PATTERN = ['exovolc_ben2.cam.h1.0001-01-01-00000.nc']
+FILE_PATTERN = ['eruption_test_aqua.cam.h1.0001-01-01-00000.nc']
 
+
+#FILE_PATTERN = [
+#    'eruption_test_aqua.cam.h1.0001-01-01-00000.nc',
+#    'eruption_test_aqua.cam.h1.0001-04-11-00000.nc',
+#    'eruption_test_aqua.cam.h1.0001-07-20-00000.nc',
+#    'eruption_test_aqua.cam.h1.0001-10-28-00000.nc',
+#    'eruption_test_aqua.cam.h1.0002-02-05-00000.nc',
+#    'eruption_test_aqua.cam.h1.0002-05-16-00000.nc',
+#    'eruption_test_aqua.cam.h1.0002-08-24-00000.nc',
+#    'eruption_test_aqua.cam.h1.0002-12-02-00000.nc',
+#    'eruption_test_aqua.cam.h1.0003-03-12-00000.nc',
+#    'eruption_test_aqua.cam.h1.0003-06-20-00000.nc',
+#    'eruption_test_aqua.cam.h1.0003-09-28-00000.nc'
+#]
+
+
+#-------------------------------------------------------------
 
 # 2. Directory to save plot
 OUTPUT_DIR = 'figures'
@@ -46,7 +54,7 @@ def get_file_list():
 
     file_list = []
     for pattern in patterns:
-        full_path = os.path.join(ROOT_DIR, pattern)
+        full_path = os.path.join(ROOT_DIR, FOLDER, pattern)
         expanded_path = os.path.expanduser(full_path)
         print(f"Searching for files with pattern: {expanded_path}")
         file_list.extend(glob.glob(expanded_path))
@@ -64,3 +72,24 @@ def get_file_list():
         return []
         
     return file_list
+
+
+# --- Logic to get experiment prefix from file list ---
+def get_experiment_name():
+    
+    prefixes = {f.split('.')[0] for f in FILE_PATTERN}
+
+    # Error Check: If the set has more than 1 item, prefixes are inconsistent
+    if len(prefixes) > 1:
+        print(f"ERROR: Multiple prefixes detected: {prefixes}")
+        sys.exit(1) # Stop the process
+    
+    if len(prefixes) == 0:
+        print("ERROR: FILE_PATTERN is empty.")
+        sys.exit(1)
+
+    # Extract the single string from the set
+    experiment_name = list(prefixes)[0]
+    print(f"{experiment_name}")
+    
+    return experiment_name
