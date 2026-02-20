@@ -6,13 +6,11 @@ import glob
 import config
 from config import G_CONST, R_AIR, R_EARTH, OUTPUT_DIR
 
+
+print("\n!============= Running exovolcano time_series diagnostics =============!")
+
 file_list = config.get_file_list()
-print(f"file_list:  '{file_list}'")
-
 experiment_name = config.get_experiment_name()
-
-
-print(f"experiment name:  '{experiment_name}'")
 
 def get_units(data_array):
     """Safely retrieves units attribute from a DataArray."""
@@ -166,3 +164,5 @@ except Exception as e:
     traceback.print_exc()
 
 print(f"\nScript finished. Plots are in '{OUTPUT_DIR}'.")
+
+print("\n!============= Exiting exovolcano time_series diagnostics =============!")

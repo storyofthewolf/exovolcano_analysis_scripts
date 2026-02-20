@@ -1,0 +1,24 @@
+# Experiment configuration for exovolcano analysis
+# Used by config.py / time_series.py
+
+# --- Path Configuration ---
+root_dir: '/Users/wolfe/Desktop/projects/volcanos/runs/'
+folder: 'ben2_vei7'
+
+file_pattern:
+  - 'exovolc_ben2.cam.h1.0001-01-01-00000.nc'
+  - 'exovolc_ben2.cam.h1.0001-04-11-00000.nc'
+  - 'exovolc_ben2.cam.h1.0001-07-20-00000.nc'
+  - 'exovolc_ben2.cam.h1.0001-10-28-00000.nc'
+  - 'exovolc_ben2.cam.h1.0002-02-05-00000.nc'
+
+# --- Physical Constants ---
+# Gravitational acceleration (m/s^2)
+g_const: 9.121824         # 9.80665 * 0.93  (exoplanet scaling)
+# Specific gas constant for atmosphere (J/kg*K)
+r_air: 188.965172522727   # pure CO2 atmosphere
+# Mean planetary radius (m)
+r_earth: 5797410000.0     # 6.371e6 * 0.91
+
+# Output directory for figures
+output_dir: 'figures'
