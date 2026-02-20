@@ -1,0 +1,68 @@
+# Experiment configuration for exovolcano analysis
+# Used by config.py / time_series.py
+
+# --- Path Configuration ---
+root_dir: '/Users/wolfe/Desktop/projects/volcanos/runs/'
+folder: 't1d_vei7'
+
+file_pattern:
+  - 't1d_vei7.cam.h1.0001-01-01-00000.nc'
+  - 't1d_vei7.cam.h1.0001-04-11-00000.nc'
+  - 't1d_vei7.cam.h1.0001-07-20-00000.nc'
+  - 't1d_vei7.cam.h1.0001-10-28-00000.nc'
+  - 't1d_vei7.cam.h1.0002-02-05-00000.nc'
+  - 't1d_vei7.cam.h1.0002-05-16-00000.nc'
+  - 't1d_vei7.cam.h1.0002-08-24-00000.nc'
+  - 't1d_vei7.cam.h1.0002-12-02-00000.nc'
+  - 't1d_vei7.cam.h1.0003-03-12-00000.nc'
+  - 't1d_vei7.cam.h1.0003-06-20-00000.nc'
+  - 't1d_vei7.cam.h1.0003-09-28-00000.nc'
+
+
+# --- Physical Constants ---
+g_const: 6.11904384          # 9.80665 * 0.624  (m/s^2)
+r_air:   188.965172522727    # pure CO2 atmosphere (J/kg/K)
+r_earth: 5020521.36          # 0.788*6.37122e6 [m]
+
+# --- Output directories ---
+figures_dir: 'figures'
+data_dir:    'data'
+
+# --- Variables to compute and export ---
+#
+# method options:
+#   mass_integral  : global sum of (q * air_mass_cell)  [kg]
+#                    also exports area-weighted mean mixing ratio profile
+#   volume_integral: global sum of (q * cell_volume)    [kg]
+#                    also exports area-weighted mean mixing ratio profile
+#   area_mean      : area-weighted global mean (surface or 3D)  [native units]
+#
+# All 3D mass_integral / volume_integral variables automatically get a
+# profile timeseries (area-weighted mean MMR vs level vs time) exported
+# alongside the scalar total.
+
+scalar_vars:
+  - name: SO2
+    method: mass_integral
+  - name: H2SO4
+    method: mass_integral
+  - name: VOLCHZMD
+    method: volume_integral
+  - name: Q
+    method: mass_integral
+  - name: TS
+    method: area_mean
+  - name: TGCLDLWP
+    method: area_mean
+  - name: TMQ
+    method: area_mean
+
+profile_vars:
+  - name: T
+    method: area_mean
+  - name: SO2
+    method: area_mean
+  - name: H2SO4
+    method: area_mean
+  - name: Q
+    method: area_mean

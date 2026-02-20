@@ -2,13 +2,13 @@
 config.py - Experiment configuration loader for exovolcano analysis.
 
 Reads experiment parameters from a YAML file. The config file path defaults
-to 'experiment.yaml' in the current directory, or can be specified via the
-CONFIG environment variable or as the first command-line argument.
+to 'experiments/experiment.yaml', or can be specified via the CONFIG
+environment variable or as the first command-line argument.
 
 Usage:
-    python time_series.py                        # uses experiment.yaml
-    python time_series.py ben2_vei7.yaml         # uses named file
-    CONFIG=ben2_vei7.yaml python time_series.py  # via environment variable
+    python time_series.py ben2_vei7.yaml         # looks in experiments/
+    python time_series.py experiments/ben2_vei7.yaml
+    CONFIG=ben2_vei7.yaml python time_series.py
 """
 
 import os
@@ -18,16 +18,16 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Load YAML config file
+# Config file resolution
 # ---------------------------------------------------------------------------
-EXPERIMENTS_DIR = "experiments"
+
+EXPERIMENTS_DIR = 'experiments'
 
 
 def _find_config_file():
     """Resolve config file path from CLI arg, env var, or default."""
     if len(sys.argv) > 1 and sys.argv[1].endswith('.yaml'):
         name = sys.argv[1]
-        # Accept full path, or bare name resolved into experiments/
         if os.path.exists(name):
             return name
         return os.path.join(EXPERIMENTS_DIR, name)
@@ -43,7 +43,6 @@ def _load_config(path):
         sys.exit(1)
     with open(path) as f:
         cfg = yaml.safe_load(f)
-    # Normalize file_pattern to always be a list
     if isinstance(cfg.get('file_pattern'), str):
         cfg['file_pattern'] = [cfg['file_pattern']]
     return cfg
@@ -53,20 +52,30 @@ _cfg = _load_config(_find_config_file())
 
 
 # ---------------------------------------------------------------------------
-# Public constants (same names as before — time_series.py unchanged)
+# Public constants
 # ---------------------------------------------------------------------------
 
-ROOT_DIR    = _cfg['root_dir']
-FOLDER      = _cfg['folder']
+ROOT_DIR     = _cfg['root_dir']
+FOLDER       = _cfg['folder']
 FILE_PATTERN = _cfg['file_pattern']
-G_CONST     = _cfg['g_const']
-R_AIR       = _cfg['r_air']
-R_EARTH     = _cfg['r_earth']
-OUTPUT_DIR  = _cfg.get('output_dir', 'figures')
+G_CONST      = _cfg['g_const']
+R_AIR        = _cfg['r_air']
+R_EARTH      = _cfg['r_earth']
+FIGURES_DIR  = _cfg.get('figures_dir', 'figures')
+DATA_DIR     = _cfg.get('data_dir', 'data')
+
+# Variable lists: each entry is a dict with keys 'name' and 'method'
+SCALAR_VARS  = _cfg.get('scalar_vars', [])
+PROFILE_VARS = _cfg.get('profile_vars', [])
+
+
+
+# Backwards-compatible alias
+OUTPUT_DIR = FIGURES_DIR
 
 
 # ---------------------------------------------------------------------------
-# Public helper functions (identical API to original config.py)
+# Public helper functions
 # ---------------------------------------------------------------------------
 
 def get_file_list():
