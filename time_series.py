@@ -1,168 +1,264 @@
-import xarray as xr
-import matplotlib.pyplot as plt
+"""
+time_series.py - Orchestrator for exovolcano time series analysis.
+
+Usage:
+    python time_series.py ben2_vei7.yaml
+"""
+
 import os
 import numpy as np
-import glob
-import config
-from config import G_CONST, R_AIR, R_EARTH, OUTPUT_DIR
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
+import config
+import compute
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
 
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
+
 file_list = config.get_file_list()
-experiment_name = config.get_experiment_name()
+if not file_list:
+    raise SystemExit("No files found. Check config.")
 
-def get_units(data_array):
-    """Safely retrieves units attribute from a DataArray."""
-    return data_array.attrs.get('units', 'unknown units')
+exp_name    = config.get_experiment_name()
+figures_dir = os.path.join(config.FIGURES_DIR, exp_name)
+data_dir    = os.path.join(config.DATA_DIR,    exp_name)
 
-# Ensure output directory exists
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(figures_dir, exist_ok=True)
+os.makedirs(os.path.join(data_dir, 'scalar'),   exist_ok=True)
+os.makedirs(os.path.join(data_dir, 'profiles'), exist_ok=True)
 
-try:
-    # Use open_mfdataset for multi-file support
-    # Added 'data_vars="minimal"' to reduce metadata overhead
-    with xr.open_mfdataset(
-        file_list, 
-        combine='by_coords', 
-        parallel=False,
-        chunks={'time': 100},
-        engine='netcdf4',
-        data_vars='minimal'
-    ) as ds:
-        
-        print("All datasets loaded successfully.")
+print(f"\nExperiment : {exp_name}")
+print(f"Figures    : {figures_dir}")
+print(f"Data       : {data_dir}\n")
 
-        # --- NaN Diagnostics ---
-        print("\n--- Running NaN Diagnostics ---")
-        for var in ['PS', 'T', 'SO2']:
-            if var in ds.data_vars:
-                nan_count = ds[var].isnull().sum().compute()
-                print(f"Checking '{var}': Found {nan_count} NaN values.")
-        print("--- End NaN Diagnostics ---\n")
-        
-        # --- 1. Calculate Grid Geometry ---
-        print("Calculating grid geometry...")
-        # Gaussian weights (gw) represent the area of each latitude band
-        with xr.open_dataset(file_list[0], engine='netcdf4') as first_ds:
-            gw_values = first_ds['gw'].load().values
-            
-        area_band_values = 2.0 * np.pi * (R_EARTH**2) * gw_values
-        nlon = len(ds['lon'])
-        cell_area_1d_da = xr.DataArray(area_band_values / nlon, coords={'lat': ds['lat']}, dims=['lat'])
-        ones_2d = xr.ones_like(ds['PS'].isel(time=0, drop=True))
-        cell_area_2d = (cell_area_1d_da * ones_2d)
 
-        # Pressure calculations for hybrid levels
-        mid_pressure_pa = ds['hyam'] * ds['P0'] + ds['hybm'] * ds['PS']
-        ilev_pressure_pa = ds['hyai'] * ds['P0'] + ds['hybi'] * ds['PS']
-        dp_pa = ilev_pressure_pa.diff(dim='ilev').rename({'ilev': 'lev'})
-        dp_pa['lev'] = ds['lev']
+# ---------------------------------------------------------------------------
+# CSV helpers
+# ---------------------------------------------------------------------------
 
-        # --- 2. Calculate Masses ---
-        air_mass_cell = (dp_pa / G_CONST) * cell_area_2d
-        
-        cell_volume = None
-        if 'VOLCHZMD' in ds.data_vars and 'T' in ds.data_vars:
-            cell_height_dz = (dp_pa * R_AIR * ds['T']) / (mid_pressure_pa * G_CONST)
-            cell_volume = cell_area_2d * cell_height_dz
+def save_scalar_csv(days, data_array, name, units=''):
+    path = os.path.join(data_dir, 'scalar', f"{name}.csv")
+    header = f"days_since_start,{name} [{units}]"
+    np.savetxt(path, np.column_stack([days, data_array.values]),
+               delimiter=',', header=header, comments='')
+    print(f"  Saved scalar : {path}")
 
-        # --- 3. Compute Time Series ---
-        print("Calculating total mass for each variable...")
-        variables_to_plot = {}
-        
-        def compute_mass_ts(var_name, mass_ref):
-            if var_name in ds.data_vars:
-                print(f"Processing {var_name}...")
-                aligned_ref = mass_ref.reindex_like(ds[var_name])
-                return (ds[var_name] * aligned_ref).sum(dim=['lev', 'lat', 'lon'], skipna=True).load()
-            return None
 
-        variables_to_plot['SO2'] = compute_mass_ts('SO2', air_mass_cell)
-        variables_to_plot['H2SO4'] = compute_mass_ts('H2SO4', air_mass_cell)
-        variables_to_plot['Q'] = compute_mass_ts('Q', air_mass_cell)
-        
-        if 'VOLCHZMD' in ds.data_vars and cell_volume is not None:
-            # Convert VOLCHZMD from g/cm3 to kg/m3 (*1000)
-            variables_to_plot['VOLCHZMD'] = compute_mass_ts('VOLCHZMD', cell_volume * 1000.0)
+def save_profile_csv(days, data_array, name, pressure_1d, altitude_1d):
+    """
+    Row 0 = coordinate reference (P [Pa] and Z [m] per level).
+    Subsequent rows = [day, val_lev0, val_lev1, ...].
+    """
+    path   = os.path.join(data_dir, 'profiles', f"{name}.csv")
+    nlev   = len(pressure_1d)
+    p_vals = np.asarray(pressure_1d)
+    z_vals = np.asarray(altitude_1d) if altitude_1d is not None else np.full(nlev, np.nan)
+    prof   = data_array.values   # (time, lev)
 
-        # Filter missing
-        variables_to_plot = {k: v for k, v in variables_to_plot.items() if v is not None}
+    lev_labels = [f"lev{k}" for k in range(nlev)]
+    header = ('days_since_start,'
+              + ','.join(f"P_{l}_Pa"   for l in lev_labels) + ','
+              + ','.join(f"Z_{l}_m"    for l in lev_labels) + ','
+              + ','.join(f"{name}_{l}" for l in lev_labels))
 
-        # Sum Sulfur components
-        s_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
-        available_s = [variables_to_plot[v] for v in s_vars if v in variables_to_plot]
-        if available_s:
-            variables_to_plot['Total Sulfur (SO2+H2SO4+VOLCHZMD)'] = sum(available_s)
+    coord_row = np.concatenate([[np.nan], p_vals, z_vals, np.full(nlev, np.nan)])
+    rows = [np.concatenate([[day], p_vals, z_vals, prof[i, :]])
+            for i, day in enumerate(days)]
 
-        # --- 4. Plotting Logic ---
-        print("Generating plots...")
-        
-        def prep_for_plot(da):
-            try:
-                t0 = ds['time'].values[0]
-                days = np.array([(t - t0).days + (t - t0).seconds/86400.0 for t in ds['time'].values])
-                da_plot = da.copy()
-                da_plot['time'] = days
-                return da_plot, "Days since start"
-            except Exception:
-                return da, ds['time'].attrs.get('units', 'time')
+    np.savetxt(path, np.vstack([coord_row, rows]),
+               delimiter=',', header=header, comments='')
+    print(f"  Saved profile: {path}")
 
-        if variables_to_plot:
-            plot_order = ['SO2', 'H2SO4', 'VOLCHZMD', 'Total Sulfur (SO2+H2SO4+VOLCHZMD)', 'Q']
-            ordered_keys = [k for k in plot_order if k in variables_to_plot]
-            
-            fig, axes = plt.subplots(nrows=len(ordered_keys), ncols=1, figsize=(12, len(ordered_keys)*3), sharex=True)
-            if len(ordered_keys) == 1: axes = [axes]
-            
-            for i, key in enumerate(ordered_keys):
-                data_to_plot, time_label = prep_for_plot(variables_to_plot[key])
-                data_to_plot.plot(ax=axes[i])
-                axes[i].set_title(f"Global Total Mass of {key}")
-                axes[i].set_ylabel("Mass (kg)")
-                axes[i].grid(True)
-                axes[i].ticklabel_format(style='sci', axis='y', scilimits=(0,0))
-            
-            axes[-1].set_xlabel(time_label)
-            plt.tight_layout()
-            filename = f"{experiment_name}.global_mean_timeseries_v1.png"
-            save_fig1 = os.path.join(OUTPUT_DIR, filename)
-            plt.savefig(save_fig1)
-            plt.close()
 
-        # --- 5. Global Mean TS ---
-        mean_vars = ['TS', 'TGCLDLWP', 'TMQ']
-        mean_data = {}
-        weights_da = xr.DataArray(gw_values, coords={'lat': ds['lat']}, dims=['lat'])
-        
-        for v in mean_vars:
-            if v in ds.data_vars:
-                print(f"Calculating mean for {v}...")
-                mean_data[v] = ds[v].weighted(weights_da).mean(dim=('lat', 'lon'), skipna=True).load()
+# ---------------------------------------------------------------------------
+# Plot helpers
+# ---------------------------------------------------------------------------
 
-        if mean_data:
-            fig, axes = plt.subplots(nrows=len(mean_data), ncols=1, figsize=(12, len(mean_data)*3), sharex=True)
-            if len(mean_data) == 1: axes = [axes]
-            
-            for i, (key, val) in enumerate(mean_data.items()):
-                data_to_plot, time_label = prep_for_plot(val)
-                data_to_plot.plot(ax=axes[i])
-                axes[i].set_title(f"Global Mean {key}")
-                axes[i].set_ylabel(get_units(ds[key]))
-                axes[i].grid(True)
-            
-            axes[-1].set_xlabel(time_label)
-            plt.tight_layout()
-            filename = f"{experiment_name}.global_mean_timeseries_v2.png"
-            save_fig2 = os.path.join(OUTPUT_DIR, filename)
-            plt.savefig(save_fig2)
-            plt.close()
+def plot_scalar_series(days, series_dict, title, ylabel, filename):
+    fig, ax = plt.subplots(figsize=(12, 4))
+    for label, da in series_dict.items():
+        ax.plot(days, da.values, label=label)
+    ax.set_xlabel('Days since start')
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
+    path = os.path.join(figures_dir, filename)
+    plt.savefig(path, dpi=150)
+    plt.close()
+    print(f"  Saved figure : {path}")
 
-except Exception as e:
-    print(f"An error occurred: {e}")
-    import traceback
-    traceback.print_exc()
 
-print(f"\nScript finished. Plots are in '{OUTPUT_DIR}'.")
+def plot_profile_hovmoller(days, data_array, pressure_1d, name,
+                           filename, log_scale=False, units='',
+):
+    """
+    Hovmoller diagram with log-pressure on the y-axis (surface at bottom,
+    model top at top).
 
+    log_scale     : bool  use LogNorm colormap (for trace species)
+    Log-scale vars: vmax = data peak, vmin = vmax / 10^LOG_SCALE_DECADES
+    Linear vars   : vmin/vmax clipped to 2nd-98th percentile
+    """
+    profile = data_array.values          # (time, lev)
+    p_mb    = np.asarray(pressure_1d) / 100.0   # Pa -> mb
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    if log_scale:
+        data_plot = np.where(profile > 0, profile, np.nan)
+        pos       = data_plot[np.isfinite(data_plot) & (data_plot > 0)]
+        decades   = LOG_SCALE_DECADES.get(name, 4)
+        if pos.size > 0:
+            _vmax = pos.max()
+            _vmin = _vmax / 10**decades
+        else:
+            _vmax = _vmin = None
+        norm  = mcolors.LogNorm(vmin=_vmin, vmax=_vmax) if (_vmin and _vmax) else None
+        mesh  = ax.pcolormesh(days, p_mb, data_plot.T,
+                              norm=norm, shading='auto', cmap='viridis')
+    else:
+        # Linear scale: clip at 2nd and 98th percentile to ignore outliers
+        _vmin = float(np.nanpercentile(profile, 2))
+        _vmax = float(np.nanpercentile(profile, 98))
+        mesh = ax.pcolormesh(days, p_mb, profile.T,
+                             vmin=_vmin, vmax=_vmax,
+                             shading='auto', cmap='viridis')
+
+    cbar = plt.colorbar(mesh, ax=ax)
+    cbar.set_label(f"{name} [{units}]" if units else name)
+
+    # Log-pressure y-axis: surface (high P) at bottom, top (low P) at top
+    ax.set_yscale('log')
+    ax.set_ylim(p_mb.max(), p_mb.min())
+    ax.yaxis.set_major_formatter(plt.FormatStrFormatter('%.4g'))
+    ax.set_xlabel('Days since start')
+    ax.set_ylabel('Pressure (mb)')
+    ax.set_title(f'Global Mean {name} vs Time')
+
+    plt.tight_layout()
+    path = os.path.join(figures_dir, filename)
+    plt.savefig(path, dpi=150)
+    plt.close()
+    print(f"  Saved figure : {path}")
+
+
+# Log-scale colormap settings for profile Hovmoller plots.
+# Keys: variable name. Values: orders of magnitude below peak to show.
+# Variables not listed here use linear scale with 2nd-98th percentile clipping.
+LOG_SCALE_DECADES = {
+    'SO2':     4,
+    'H2SO4':   4,
+    'Q':       4,
+    'VOLCHZMD':4,
+}
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+ds, gw_values = compute.load_dataset(file_list)
+
+with ds:
+    days = compute.days_since_start(ds)
+
+    print("Computing grid geometry...")
+    geom = compute.compute_geometry(ds, gw_values)
+
+    # Time-mean, area-mean pressure and altitude profiles for CSV output
+    pressure_1d = geom['mid_p'].mean(dim=['time', 'lat', 'lon']).compute().values
+    altitude_1d = geom['z_mid'].mean(dim=['time', 'lat', 'lon']).compute().values
+
+    # -----------------------------------------------------------------------
+    # Scalar time series
+    # -----------------------------------------------------------------------
+    print("\n--- Scalar time series ---")
+    scalars = {}
+
+    for var_cfg in config.SCALAR_VARS:
+        name   = var_cfg['name']
+        method = var_cfg['method']
+        print(f"  Computing {name} ({method})...")
+        result = compute.compute_scalar(ds, geom, name, method)
+        if result is not None:
+            scalars[name] = result
+            units = ds[name].attrs.get('units', '') if name in ds else ''
+            save_scalar_csv(days, result, name, units)
+
+    # -----------------------------------------------------------------------
+    # Profile time series
+    # -----------------------------------------------------------------------
+    print("\n--- Profile time series ---")
+    profiles = {}
+
+    for var_cfg in config.PROFILE_VARS:
+        name = var_cfg['name']
+        print(f"  Computing profile {name}...")
+        result = compute.compute_profile(ds, geom, name)
+        if result is not None:
+            profiles[name] = result
+            save_profile_csv(days, result, name, pressure_1d, altitude_1d)
+
+    # Always include VOLCHZMD profile if variable exists
+#    if 'VOLCHZMD' in ds.data_vars and 'VOLCHZMD' not in profiles:
+#        print("  Computing profile VOLCHZMD...")
+#        result = compute.compute_profile(ds, geom, 'VOLCHZMD')
+#        if result is not None:
+#            profiles['VOLCHZMD'] = result
+#            save_profile_csv(days, result, 'VOLCHZMD', pressure_1d, altitude_1d)
+
+    # -----------------------------------------------------------------------
+    # Quicklook - scalar plots
+    # -----------------------------------------------------------------------
+    print("\n--- Quicklook plots ---")
+
+    sulfur_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
+    sulfur = {k: scalars[k] for k in sulfur_vars if k in scalars}
+    if sulfur:
+        total = sum(sulfur.values())
+        plot_scalar_series(days, dict(sulfur, Total=total),
+                           title='Global Total Sulfur Budget',
+                           ylabel='Mass (kg)',
+                           filename='quicklook_sulfur_budget.png')
+
+    for name in ['TS', 'TGCLDLWP', 'TMQ']:
+        if name in scalars:
+            units = ds[name].attrs.get('units', '') if name in ds else ''
+            plot_scalar_series(days, {name: scalars[name]},
+                               title=f'Global Mean {name}',
+                               ylabel=units,
+                               filename=f'quicklook_{name}.png')
+
+    if 'Q' in scalars:
+        plot_scalar_series(days, {'Q': scalars['Q']},
+                           title='Global Total Water Vapor Mass',
+                           ylabel='Mass (kg)',
+                           filename='quicklook_Q_mass.png')
+
+    # -----------------------------------------------------------------------
+    # Quicklook - Hovmoller profile plots (log-pressure y-axis)
+    # -----------------------------------------------------------------------
+    for var_cfg in config.PROFILE_VARS + [{'name': n} for n in profiles if n not in [v['name'] for v in config.PROFILE_VARS]]:
+        name = var_cfg['name']
+        if name not in profiles:
+            continue
+        da    = profiles[name]
+        units = ds[name].attrs.get('units', '') if name in ds else ''
+        plot_profile_hovmoller(
+            days, da, pressure_1d, name,
+            filename=f'quicklook_profile_{name}.png',
+            log_scale=(name in LOG_SCALE_DECADES),
+            units=units,
+        )
+
+print(f"\nDone. Figures in '{figures_dir}', data in '{data_dir}'.")
 print("\n!============= Exiting exovolcano time_series diagnostics =============!")

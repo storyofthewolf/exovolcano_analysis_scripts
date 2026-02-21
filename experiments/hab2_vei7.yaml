@@ -3,14 +3,20 @@
 
 # --- Path Configuration ---
 root_dir: '/Users/wolfe/Desktop/projects/volcanos/runs/'
-folder: 'ben2_vei7'
+folder: 'hab2_vei7'
 
 file_pattern:
-  - 'exovolc_ben2.cam.h1.0001-01-01-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-04-11-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-07-20-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-10-28-00000.nc'
-  - 'exovolc_ben2.cam.h1.0002-02-05-00000.nc'
+  - 'hab2_vei7.cam.h1.0001-01-01-00000.nc'
+  - 'hab2_vei7.cam.h1.0001-04-11-00000.nc'
+  - 'hab2_vei7.cam.h1.0001-07-20-00000.nc'
+  - 'hab2_vei7.cam.h1.0001-10-28-00000.nc'
+  - 'hab2_vei7.cam.h1.0002-02-05-00000.nc'
+  - 'hab2_vei7.cam.h1.0002-05-16-00000.nc'
+  - 'hab2_vei7.cam.h1.0002-08-24-00000.nc'
+  - 'hab2_vei7.cam.h1.0002-12-02-00000.nc'
+  - 'hab2_vei7.cam.h1.0003-03-12-00000.nc'
+  - 'hab2_vei7.cam.h1.0003-06-20-00000.nc'
+  - 'hab2_vei7.cam.h1.0003-09-28-00000.nc'
 
 # --- Physical Constants ---
 g_const: 9.121824          # 9.80665 * 0.93  (m/s^2)

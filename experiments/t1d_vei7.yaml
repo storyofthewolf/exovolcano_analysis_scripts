@@ -66,3 +66,5 @@ profile_vars:
     method: area_mean
   - name: Q
     method: area_mean
+  - name: VOLCHZMD
+    method: area_mean
