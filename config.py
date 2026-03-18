@@ -6,8 +6,8 @@ to 'experiments/experiment.yaml', or can be specified via the CONFIG
 environment variable or as the first command-line argument.
 
 Usage:
-    python time_series.py ben2_vei7.yaml         # looks in experiments/
-    python time_series.py experiments/ben2_vei7.yaml
+    python run_time_series.py ben2_vei7.yaml         # looks in experiments/
+    python run_time_series.py experiments/ben2_vei7.yaml
     CONFIG=ben2_vei7.yaml python time_series.py
 """
 
@@ -58,9 +58,9 @@ _cfg = _load_config(_find_config_file())
 ROOT_DIR     = _cfg['root_dir']
 FOLDER       = _cfg['folder']
 FILE_PATTERN = _cfg['file_pattern']
-G_CONST      = _cfg['g_const']
-R_AIR        = _cfg['r_air']
-R_EARTH      = _cfg['r_earth']
+G_CONST      = float(_cfg['g_const'])
+R_AIR        = float(_cfg['r_air'])
+R_EARTH      = float(_cfg['r_earth'])
 FIGURES_DIR  = _cfg.get('figures_dir', 'figures')
 DATA_DIR     = _cfg.get('data_dir', 'data')
 

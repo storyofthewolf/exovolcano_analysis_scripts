@@ -44,6 +44,7 @@ def load_dataset(file_list):
     with xr.open_dataset(file_list[0], engine='netcdf4') as ds0:
         gw_values = ds0['gw'].values.ravel()
 
+    xr.set_options(use_new_combine_kwarg_defaults=True)
     ds = xr.open_mfdataset(
         file_list,
         combine='by_coords',

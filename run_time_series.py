@@ -1,8 +1,8 @@
 """
-time_series.py - Orchestrator for exovolcano time series analysis.
+run_time_series.py - Orchestrator for exovolcano time series analysis.
 
 Usage:
-    python time_series.py ben2_vei7.yaml
+    python run_time_series.py ben2_vei7.yaml
 """
 
 import os
