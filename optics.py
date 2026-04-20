@@ -36,16 +36,27 @@ def load_band_optics(filepath):
     with xr.open_dataset(filepath, engine='netcdf4') as ds:
         wvnrng      = ds['wvnrng'].values.ravel()           # (69,)
         wvn_centers = 0.5 * (wvnrng[:-1] + wvnrng[1:])     # (68,)
-        rbins       = ds['rbins'].values[:, 0] * 1e4           # cm -> µm
+        rbins       = ds['rbins'].values[:, 0] #* 1e4           # cm -> µm
         Kext        = ds['Kext'].values[:, :, 0]             # (68, 40)
         W           = ds['W'].values[:, :, 0]                # (68, 40)
         G           = ds['G'].values[:, :, 0]                # (68, 40)
 
+    kext_raw   = ds['Kext'].values[:, :, 0]          # (68, nbins)
+    kext_units = ds['Kext'].attrs.get('units', '').strip()
+    if kext_units in ('m2 kg-1', 'm2/kg', 'm^2/kg', 'm2 kg^-1'):
+
+        print("-- SI units detected in optpropt file --")
+        print("-- convert to cgs for calculation (x10) --") 
+        kext_cgs = kext_raw * 10.0                     # m²/kg -> cm²/g
+    else:
+        print(" CGS units detected in optpropt file ")
+        kext_cgs = kext_raw                           # assume already cm²/g
+        
     return {
         'wvnrng':      wvnrng,
         'wvn_centers': wvn_centers,
         'rbins':       rbins,
-        'Kext':        Kext,
+        'Kext':        kext_cgs,
         'W':           W,
         'G':           G,
     }
@@ -99,11 +110,21 @@ def interpolate_kext(optics, i_wave, reff_um):
     kext  = optics['Kext'][i_wave, :]
 
     r_min, r_max = rbins.min(), rbins.max()
-    if reff_um < r_min or reff_um > r_max:
-        raise ValueError(
-            f"reff_um={reff_um} is outside the optics table range "
-            f"[{r_min}, {r_max}] microns."
-        )
+
+    # Use relative tolerance for the bounds check to handle float precision.
+    # Also handle nbins=1 where min==max: warn if reff differs by more than 1%
+    # but proceed anyway since there is no interpolation to do.
+    rtol = 0.01
+    if len(rbins) == 1:
+        if abs(reff_um - rbins[0]) / rbins[0] > rtol:
+            print(f"  WARNING: reff_um={reff_um} differs from single bin "
+                  f"radius={rbins[0]:.4f} um by more than {rtol*100:.0f}%.")
+    else:
+        if reff_um < r_min * (1 - rtol) or reff_um > r_max * (1 + rtol):
+            raise ValueError(
+                f"reff_um={reff_um} is outside the optics table range "
+                f"[{r_min:.4f}, {r_max:.4f}] microns."
+            )
 
     log_r    = np.log(rbins)
     log_kext = np.log(kext)
