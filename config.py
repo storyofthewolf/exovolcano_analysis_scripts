@@ -68,7 +68,13 @@ DATA_DIR     = _cfg.get('data_dir', 'data')
 SCALAR_VARS  = _cfg.get('scalar_vars', [])
 PROFILE_VARS = _cfg.get('profile_vars', [])
 
-
+# Aerosol optics
+OPTICS_FILE = _cfg.get('optics_file', None)
+VOLC_REFF   = float(_cfg.get('volc_reff',   1.0))
+RHO_AEROSOL = float(_cfg.get('rho_aerosol', 1.84))
+MIE_WAVE_UM = _cfg.get('mie_wavelength_um', None)
+MIE_N_REAL  = float(_cfg.get('mie_refractive_index_real', 1.43))
+MIE_N_IMAG  = float(_cfg.get('mie_refractive_index_imag', 0.0))
 
 # Backwards-compatible alias
 OUTPUT_DIR = FIGURES_DIR

@@ -3,14 +3,11 @@
 
 # --- Path Configuration ---
 root_dir: '/Users/wolfe/Desktop/projects/volcanos/runs/'
-folder: 'ben2_vei7'
+folder: 'ben1_vei7'
 
 file_pattern:
-  - 'exovolc_ben2.cam.h1.0001-01-01-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-04-11-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-07-20-00000.nc'
-  - 'exovolc_ben2.cam.h1.0001-10-28-00000.nc'
-  - 'exovolc_ben2.cam.h1.0002-02-05-00000.nc'
+  - 'exovolc_ben1.cam.h1.0001-01-01-00000.nc'
+  - 'exovolc_ben1.cam.h1.0001-04-11-00000.nc'
 
 # --- Physical Constants ---
 g_const: 9.121824          # 9.80665 * 0.93  (m/s^2)
@@ -61,13 +58,3 @@ profile_vars:
     method: area_mean
   - name: VOLCHZMD
     method: area_mean
-
-# --- Aerosol optics (AOD calculation) ---
-volc_reff:   1.0    # effective particle radius [microns]
-rho_aerosol: 1.84   # bulk aerosol density [g/cm³]
-optics_file: '/path/to/haze_n68_b40_mie.nc'
-
-# Optional single-wavelength Mie calculation (uncomment to enable)
-# mie_wavelength_um:          0.55
-# mie_refractive_index_real:  1.43
-# mie_refractive_index_imag:  0.0

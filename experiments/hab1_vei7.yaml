@@ -1,0 +1,95 @@
+# Experiment configuration for exovolcano analysis
+# Used by config.py / time_series.py
+
+# --- Path Configuration ---
+root_dir: '/Users/wolfe/Desktop/projects/volcanos/runs/'
+folder: 'hab1_vei7'
+
+file_pattern:
+  - 'exovolc_hab1.cam.h1.0001-01-01-00000.nc'
+  - 'exovolc_hab1.cam.h1.0001-04-11-00000.nc'
+  - 'exovolc_hab1.cam.h1.0001-07-20-00000.nc'
+  - 'exovolc_hab1.cam.h1.0001-10-28-00000.nc'
+  - 'exovolc_hab1.cam.h1.0002-02-05-00000.nc'
+  - 'exovolc_hab1.cam.h1.0002-05-16-00000.nc'
+  - 'exovolc_hab1.cam.h1.0002-08-24-00000.nc'
+  
+# --- Physical Constants ---
+g_const: 9.121824          # 9.80665 * 0.93  (m/s^2)
+r_air:   288.965172522727  # pure CO2 atmosphere (J/kg/K)
+r_earth: 5797410.0         # 6.371e6 * 0.91  (m)
+
+# --- Output directories ---
+figures_dir: 'figures'
+data_dir:    'data'
+
+# --- Variables to compute and export ---
+#
+# method options:
+#   mass_integral  : global sum of (q * air_mass_cell)  [kg]
+#                    also exports area-weighted mean mixing ratio profile
+#   volume_integral: global sum of (q * cell_volume)    [kg]
+#                    also exports area-weighted mean mixing ratio profile
+#   area_mean      : area-weighted global mean (surface or 3D)  [native units]
+#
+# All 3D mass_integral / volume_integral variables automatically get a
+# profile timeseries (area-weighted mean MMR vs level vs time) exported
+# alongside the scalar total.
+
+scalar_vars:
+  - name: SO2
+    method: mass_integral
+  - name: H2SO4
+    method: mass_integral
+  - name: VOLCHZMD
+    method: volume_integral
+  - name: Q
+    method: mass_integral
+  - name: TS
+    method: area_mean
+  - name: TGCLDLWP
+    method: area_mean
+  - name: TMQ
+    method: area_mean
+
+profile_vars:
+  - name: T
+    method: area_mean
+  - name: SO2
+    method: area_mean
+  - name: H2SO4
+    method: area_mean
+  - name: Q
+    method: area_mean
+  - name: VOLCHZMD
+    method: area_mean
+
+# =============================================================================
+# AOD CALCULATION  (OPTIONAL — omit optics_file or leave it null to skip AOD)
+# =============================================================================
+# AOD requires the VOLCHZMD variable to be present in the CAM output.
+# When optics_file is set, the band-interpolated 550 nm AOD is always
+# computed.  The Mie block below is an additional optional calculation.
+
+# Effective particle radius [µm] used for Kext interpolation / Mie calculation.
+# Default: 1.0
+volc_reff: 1.0
+
+# Bulk aerosol density [g/cm³].  Used only by the Mie calculation.
+# Sulfuric acid / water solution: ~1.84 g/cm³
+# Default: 1.84
+rho_aerosol: 1.84
+
+# Path to the pre-computed Mie optics NetCDF file (haze_n68_b40_mie.nc).
+# Set this to the actual path on your system to enable AOD output.
+# Omit this key (or set to null) to skip all AOD calculations.
+optics_file: '/Users/wolfe/models/ExoRT/data/aerosol/haze_n68_b40_mie.nc'
+
+# ---------------------------------------------------------------------------
+# Optional: single-wavelength Mie AOD at a custom wavelength
+# Uncomment all three lines to enable.  Requires miepython to be installed.
+# Produces an additional timeseries and zonal Hovmoller plot pair.
+# ---------------------------------------------------------------------------
+mie_wavelength_um: 0.55          # wavelength [µm]
+mie_refractive_index_real: 1.43  # real part of complex refractive index
+mie_refractive_index_imag: 0.0   # imaginary part (positive convention)

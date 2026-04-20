@@ -5,6 +5,68 @@ Usage:
     python run_time_series.py ben2_vei7.yaml
 """
 
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
+    print("""
+Usage:
+    python run_time_series.py <experiment>.yaml
+    python run_time_series.py experiments/<experiment>.yaml
+    CONFIG=experiments/<experiment>.yaml python run_time_series.py
+
+  The YAML file is looked up in the experiments/ directory unless a path
+  separator is present.  A fully-annotated template is at:
+    experiments/template.yaml
+
+Required YAML keys
+------------------
+  root_dir      Absolute path to the top-level CESM archive directory.
+  folder        Subdirectory under root_dir containing the NetCDF files
+                (e.g. 'run_name/atm/hist').
+  file_pattern  List of CAM h1 history filenames (basenames).  All files
+                must share the same prefix; that prefix becomes the
+                experiment name used for output subdirectories.
+  g_const       Surface gravity [m/s²].
+  r_air         Specific gas constant of the atmosphere [J/kg/K].
+  r_earth       Mean planet radius [m].
+
+Optional YAML keys (defaults in parentheses)
+--------------------------------------------
+  figures_dir   Root directory for PNG output  ('figures').
+  data_dir      Root directory for CSV output  ('data').
+  optics_file   Path to haze_n68_b40_mie.nc.  Set this to enable AOD
+                calculations; omit or set to null to skip AOD entirely.
+  volc_reff     Effective particle radius [µm] for Kext lookup  (1.0).
+  rho_aerosol   Bulk aerosol density [g/cm³], used by Mie path  (1.84).
+  mie_wavelength_um          Wavelength [µm] for optional single-wavelength
+                             Mie AOD calculation.  Requires miepython.
+  mie_refractive_index_real  Real part of complex refractive index  (1.43).
+  mie_refractive_index_imag  Imaginary part, positive convention  (0.0).
+
+scalar_vars / profile_vars sections
+------------------------------------
+  Each entry is a list item with 'name' and 'method' keys:
+
+    scalar_vars:
+      - name: SO2
+        method: mass_integral     # global total mass [kg]
+      - name: TS
+        method: area_mean         # Gaussian-weighted global mean
+      - name: VOLCHZMD
+        method: volume_integral   # density-weighted total mass [kg]
+
+    profile_vars:
+      - name: T
+        method: area_mean         # global mean profile (time × lev)
+
+  method options:  mass_integral | volume_integral | area_mean
+
+Example
+-------
+    python run_time_series.py t1d_vei7.yaml
+""")
+    sys.exit(0)
+
 import os
 import numpy as np
 import matplotlib
@@ -12,8 +74,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
+import xarray as xr
+
 import config
 import compute
+import optics
+import aod_plots
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
 
@@ -30,8 +96,10 @@ figures_dir = os.path.join(config.FIGURES_DIR, exp_name)
 data_dir    = os.path.join(config.DATA_DIR,    exp_name)
 
 os.makedirs(figures_dir, exist_ok=True)
-os.makedirs(os.path.join(data_dir, 'scalar'),   exist_ok=True)
-os.makedirs(os.path.join(data_dir, 'profiles'), exist_ok=True)
+os.makedirs(os.path.join(data_dir,    'scalar'),   exist_ok=True)
+os.makedirs(os.path.join(data_dir,    'profiles'), exist_ok=True)
+os.makedirs(os.path.join(data_dir,    'aod'),      exist_ok=True)
+os.makedirs(os.path.join(figures_dir, 'aod'),      exist_ok=True)
 
 print(f"\nExperiment : {exp_name}")
 print(f"Figures    : {figures_dir}")
@@ -52,8 +120,9 @@ def save_scalar_csv(days, data_array, name, units=''):
 
 def save_profile_csv(days, data_array, name, pressure_1d, altitude_1d):
     """
-    Row 0 = coordinate reference (P [Pa] and Z [m] per level).
-    Subsequent rows = [day, val_lev0, val_lev1, ...].
+    Vertical coordinate info (P and Z per level) is written as comment lines
+    before the column header so it is preserved without NaN placeholders.
+    Data rows: days_since_start, val_lev0, val_lev1, ...
     """
     path   = os.path.join(data_dir, 'profiles', f"{name}.csv")
     nlev   = len(pressure_1d)
@@ -63,17 +132,33 @@ def save_profile_csv(days, data_array, name, pressure_1d, altitude_1d):
 
     lev_labels = [f"lev{k}" for k in range(nlev)]
     header = ('days_since_start,'
-              + ','.join(f"P_{l}_Pa"   for l in lev_labels) + ','
-              + ','.join(f"Z_{l}_m"    for l in lev_labels) + ','
               + ','.join(f"{name}_{l}" for l in lev_labels))
 
-    coord_row = np.concatenate([[np.nan], p_vals, z_vals, np.full(nlev, np.nan)])
-    rows = [np.concatenate([[day], p_vals, z_vals, prof[i, :]])
-            for i, day in enumerate(days)]
-
-    np.savetxt(path, np.vstack([coord_row, rows]),
-               delimiter=',', header=header, comments='')
+    with open(path, 'w') as f:
+        f.write('# pressure_Pa: ' + ','.join(f"{v:.6e}" for v in p_vals) + '\n')
+        f.write('# altitude_m: '  + ','.join(f"{v:.6e}" for v in z_vals) + '\n')
+        f.write(header + '\n')
+        np.savetxt(f, np.column_stack([days, prof]), delimiter=',')
     print(f"  Saved profile: {path}")
+
+
+def save_aod_scalar_csv(days, aod_global, tag):
+    """Global-mean AOD time series.  Two columns: days_since_start, AOD."""
+    path   = os.path.join(data_dir, 'aod', f"aod_{tag}.csv")
+    header = f"days_since_start,AOD_{tag}"
+    np.savetxt(path, np.column_stack([days, aod_global]),
+               delimiter=',', header=header, comments='')
+    print(f"  Saved AOD scalar : {path}")
+
+
+def save_aod_zonal_csv(days, aod_zonal, lat, tag):
+    """Zonal-mean AOD.  Header row lists lat values; each data row is one timestep."""
+    path      = os.path.join(data_dir, 'aod', f"aod_zonal_{tag}.csv")
+    lat_labels = [f"{v:.4f}" for v in lat]
+    header    = 'days_since_start,' + ','.join(lat_labels)
+    np.savetxt(path, np.column_stack([days, aod_zonal]),
+               delimiter=',', header=header, comments='')
+    print(f"  Saved AOD zonal  : {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +344,73 @@ with ds:
             log_scale=(name in LOG_SCALE_DECADES),
             units=units,
         )
+
+    # -----------------------------------------------------------------------
+    # AOD
+    # -----------------------------------------------------------------------
+    print("\n--- AOD ---")
+
+    if config.OPTICS_FILE is None:
+        print("  WARNING: 'optics_file' not set in config. Skipping AOD calculations.")
+    elif 'VOLCHZMD' not in ds.data_vars:
+        print("  WARNING: 'VOLCHZMD' not found in dataset. Skipping AOD calculations.")
+    else:
+        band_optics    = optics.load_band_optics(config.OPTICS_FILE)
+        volchzmd_vals  = ds['VOLCHZMD'].values   # (time, lev, lat, lon) [g/cm³]
+        dz_vals        = geom['dz'].values        # (time, lev, lat, lon) [m]
+        lat            = ds['lat'].values
+
+        aod_figures_dir = os.path.join(figures_dir, 'aod')
+
+        def _aod_diagnostics(kext, label, tag):
+            """Compute global-mean and zonal-mean AOD, save CSVs and plots."""
+            aod_2d = optics.compute_aod(volchzmd_vals, dz_vals, kext)  # (time, lat, lon)
+
+            # Area-weighted global mean: weight by Gaussian weights over lat,
+            # then simple mean over lon (all longitudes are equal-weight).
+            aod_da  = xr.DataArray(aod_2d,
+                                   dims=['time', 'lat', 'lon'],
+                                   coords={'lat': ds['lat'], 'lon': ds['lon']})
+            weights = xr.DataArray(gw_values, coords={'lat': ds['lat']}, dims=['lat'])
+            aod_global = aod_da.weighted(weights).mean(dim=['lat', 'lon']).values
+
+            # Zonal mean: simple mean over lon
+            aod_zonal = aod_2d.mean(axis=2)   # (time, lat)
+
+            print(f"  {label}: peak global-mean AOD = {aod_global.max():.4f}")
+
+            save_aod_scalar_csv(days, aod_global, tag)
+            save_aod_zonal_csv(days, aod_zonal, lat, tag)
+
+            aod_plots.plot_aod_timeseries(
+                days, aod_global, label, aod_figures_dir,
+                filename=f'aod_{tag}_timeseries.png',
+            )
+            aod_plots.plot_aod_zonal_hovmoller(
+                days, aod_zonal, lat, aod_figures_dir,
+                filename=f'aod_{tag}_zonal_hovmoller.png',
+            )
+
+        # Band-interpolated Kext at 550 nm
+        i_wave    = optics.select_band_550nm(band_optics['wvn_centers'])
+        kext_550  = optics.interpolate_kext(band_optics, i_wave, config.VOLC_REFF)
+        print(f"  Band 550 nm index={i_wave}, "
+              f"center={band_optics['wvn_centers'][i_wave]:.1f} cm⁻¹, "
+              f"Kext={kext_550:.4f} cm²/g  (reff={config.VOLC_REFF} µm)")
+        _aod_diagnostics(kext_550, '550 nm (band)', '550nm_band')
+
+        # Optional single-wavelength Mie Kext
+        if config.MIE_WAVE_UM is not None:
+            mie_wave = float(config.MIE_WAVE_UM)
+            kext_mie = optics.mie_kext(
+                mie_wave, config.VOLC_REFF,
+                config.MIE_N_REAL, config.MIE_N_IMAG,
+                config.RHO_AEROSOL,
+            )
+            label_mie = f'{mie_wave:.3f} µm (Mie)'
+            print(f"  Mie {label_mie}: Kext={kext_mie:.4f} cm²/g")
+            tag_mie = f'{mie_wave:.3f}um_mie'.replace('.', 'p')
+            _aod_diagnostics(kext_mie, label_mie, tag_mie)
 
 print(f"\nDone. Figures in '{figures_dir}', data in '{data_dir}'.")
 print("\n!============= Exiting exovolcano time_series diagnostics =============!")

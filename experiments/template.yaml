@@ -1,0 +1,155 @@
+# template.yaml — complete reference for all configurable fields.
+# Copy this file, rename it for your experiment, and fill in your values.
+# All settings in this file are read by config.py at startup.
+#
+# Usage:
+#   python run_time_series.py my_experiment.yaml
+#
+# Fields marked REQUIRED must be present. Fields marked OPTIONAL have defaults
+# shown; omit them to accept the default.
+
+# =============================================================================
+# INPUT FILES  (REQUIRED)
+# =============================================================================
+
+# Absolute path to the top-level archive directory.
+root_dir: '/path/to/cesm/archive/'
+
+# Subdirectory under root_dir containing the NetCDF files.
+# For a standard CESM archive layout this is typically:
+#   'run_name/atm/hist'
+folder: 'run_name/atm/hist'
+
+# List of CAM h1 history filenames (basenames only, no directory).
+# The prefix before the first '.' is used as the experiment name for
+# output subdirectory naming, so all files must share the same prefix.
+file_pattern:
+  - 'run_name.cam.h1.0001-01-01-00000.nc'
+  - 'run_name.cam.h1.0001-04-11-00000.nc'
+  # add one line per file to include in the time series
+
+
+# =============================================================================
+# PLANET-SPECIFIC PHYSICAL CONSTANTS  (REQUIRED)
+# =============================================================================
+# These must be set to match the planet simulated. Do NOT use standard
+# Earth values for exoplanet runs — the grid geometry, layer mass, and
+# AOD calculations all depend on these.
+
+# Surface gravity [m/s²]
+# Earth: 9.80665  |  example exo: 9.80665 * 0.93 = 9.121824
+g_const: 9.80665
+
+# Specific gas constant of the atmosphere [J/kg/K]
+# Earth air (~N2/O2):  287.058
+# Pure CO2 atmosphere: 188.965
+r_air: 287.058
+
+# Mean planetary radius [m]
+# Earth: 6.371e6  |  example exo: 6.371e6 * 0.91 = 5.797e6
+r_earth: 6.371e6
+
+
+# =============================================================================
+# OUTPUT DIRECTORIES  (OPTIONAL — defaults shown)
+# =============================================================================
+
+# Root directory for PNG quicklook figures.
+# Actual output goes to <figures_dir>/<experiment_name>/
+figures_dir: 'figures'
+
+# Root directory for CSV data exports.
+# Actual output goes to <data_dir>/<experiment_name>/scalar/
+#                    and <data_dir>/<experiment_name>/profiles/
+data_dir: 'data'
+
+
+# =============================================================================
+# SCALAR TIME SERIES  (OPTIONAL — omit section to skip all scalars)
+# =============================================================================
+# Each entry produces one CSV in data/<exp>/scalar/<name>.csv and one
+# quicklook PNG in figures/<exp>/.
+#
+# method options:
+#
+#   mass_integral
+#     Global total mass [kg] = Σ (q × air_mass_cell) over all lev, lat, lon.
+#     Use for mixing-ratio fields (SO2, H2SO4, Q, …).
+#
+#   volume_integral
+#     Global total mass [kg] = Σ (ρ × cell_volume) over all lev, lat, lon.
+#     Use for density fields.  VOLCHZMD [g/cm³] is converted to kg/m³
+#     internally before integrating.
+#
+#   area_mean
+#     Gaussian-weight area-averaged global mean, returned in native variable
+#     units.  Works for both 2D surface fields (TS, TMQ, TGCLDLWP) and 3D
+#     fields (result is then a time series of the vertically-integrated mean).
+
+scalar_vars:
+  - name: SO2
+    method: mass_integral
+  - name: H2SO4
+    method: mass_integral
+  - name: VOLCHZMD
+    method: volume_integral
+  - name: Q
+    method: mass_integral
+  - name: TS
+    method: area_mean
+  - name: TGCLDLWP
+    method: area_mean
+  - name: TMQ
+    method: area_mean
+
+
+# =============================================================================
+# VERTICAL PROFILE TIME SERIES  (OPTIONAL — omit section to skip profiles)
+# =============================================================================
+# Each entry produces one CSV in data/<exp>/profiles/<name>.csv and one
+# Hovmoller PNG (time × pressure level) in figures/<exp>/.
+# Profiles are always the area-weighted global mean at each model level.
+# The 'method' key is accepted for forward-compatibility but is ignored.
+
+profile_vars:
+  - name: T
+    method: area_mean
+  - name: SO2
+    method: area_mean
+  - name: H2SO4
+    method: area_mean
+  - name: Q
+    method: area_mean
+  - name: VOLCHZMD
+    method: area_mean
+
+
+# =============================================================================
+# AOD CALCULATION  (OPTIONAL — omit optics_file or leave it null to skip AOD)
+# =============================================================================
+# AOD requires the VOLCHZMD variable to be present in the CAM output.
+# When optics_file is set, the band-interpolated 550 nm AOD is always
+# computed.  The Mie block below is an additional optional calculation.
+
+# Effective particle radius [µm] used for Kext interpolation / Mie calculation.
+# Default: 1.0
+volc_reff: 1.0
+
+# Bulk aerosol density [g/cm³].  Used only by the Mie calculation.
+# Sulfuric acid / water solution: ~1.84 g/cm³
+# Default: 1.84
+rho_aerosol: 1.84
+
+# Path to the pre-computed Mie optics NetCDF file (haze_n68_b40_mie.nc).
+# Set this to the actual path on your system to enable AOD output.
+# Omit this key (or set to null) to skip all AOD calculations.
+optics_file: '/path/to/haze_n68_b40_mie.nc'
+
+# ---------------------------------------------------------------------------
+# Optional: single-wavelength Mie AOD at a custom wavelength
+# Uncomment all three lines to enable.  Requires miepython to be installed.
+# Produces an additional timeseries and zonal Hovmoller plot pair.
+# ---------------------------------------------------------------------------
+# mie_wavelength_um: 0.55          # wavelength [µm]
+# mie_refractive_index_real: 1.43  # real part of complex refractive index
+# mie_refractive_index_imag: 0.0   # imaginary part (positive convention)
