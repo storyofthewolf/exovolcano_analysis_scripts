@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 run_time_series.py - Orchestrator for exovolcano time series analysis.
 
