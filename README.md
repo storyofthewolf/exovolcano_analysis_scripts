@@ -99,6 +99,23 @@ profile_vars:
     method: area_mean    # always area_mean regardless of value given
 ```
 
+### Zonal mean snapshots (optional)
+
+Produces a contour plot and CSV for each variable at each requested day. The nearest available timestep is used.
+
+```yaml
+zonal_mean_vars:
+  - name: T
+  - name: SO2
+  - name: H2SO4
+  - name: VOLCHZMD
+
+zonal_mean_periods:
+  increment: [0, 1, 4, 10, 50, 100]   # days since start
+```
+
+Both sections must be present to enable zonal output. Omitting either silently skips the section.
+
 ### AOD calculation (optional)
 
 AOD requires VOLCHZMD in the CAM output. **All AOD settings are in the same experiment YAML.** If `optics_file` is absent or `null`, the entire AOD section is skipped with a printed warning.
@@ -139,6 +156,10 @@ Each plot uses a shared x-axis of days since the first time step.
 
 One `quicklook_profile_<VAR>.png` per entry in `profile_vars`. The y-axis is log-pressure in mb with the surface at the bottom. Variables in the log-scale group (SO2, H2SO4, Q, VOLCHZMD) use a `LogNorm` colormap spanning 4 orders of magnitude below the peak value. All other variables use a linear colormap clipped to the 2nd–98th percentile of the data.
 
+### Zonal mean contour plots (requires `zonal_mean_vars` and `zonal_mean_periods`)
+
+One `zonal/zonal_<VAR>_day<DAY>.png` per (variable, day) pair. The x-axis is latitude in degrees (full range), the y-axis is log-pressure in mb with the surface at the bottom — the same layout as the profile Hovmoller plots. Log-scale variables (SO2, H2SO4, Q, VOLCHZMD) use `LogNorm` spanning 4 decades below the peak; all others use linear scale clipped to the 2nd–98th percentile.
+
 ### AOD plots (requires `optics_file`)
 
 Two plots are produced per wavelength:
@@ -151,6 +172,21 @@ Two plots are produced per wavelength:
 | `quicklook_aod_<W>um_mie_zonal_hovmoller.png` | Zonal mean AOD at `mie_wavelength_um` vs time |
 
 The Mie pair is only produced when `mie_wavelength_um` is set in the YAML.
+
+---
+
+## Zonal mean CSV format
+
+Files are written to `data/<exp>/zonal/<VAR>_day<DAY>.csv`. Rows are pressure levels, columns are latitudes:
+
+```
+pressure_mb, -90.0000, -87.5000, ..., 90.0000
+1.2345,       0.0,      0.0,     ..., 0.0
+2.5678,       0.0,      0.0,     ..., 0.0
+...
+```
+
+Read in pandas with `pd.read_csv(path)`. The `pressure_mb` column gives the layer midpoint pressure in mb (time- and area-mean from the first timestep).
 
 ---
 
@@ -186,12 +222,13 @@ This is useful for wavelengths outside the optics table or for sensitivity tests
 ```
 run_time_series.py   Orchestrator: loads data, calls compute/optics, saves outputs
 config.py            YAML loader; exposes all experiment parameters as module constants
-compute.py           Pure computation: grid geometry, mass integrals, area means
+compute.py           Pure computation: grid geometry, mass integrals, area means, zonal means
 optics.py            Pure computation: optics table I/O, Kext interpolation, Mie, AOD
 aod_plots.py         AOD-specific plot functions (timeseries, zonal Hovmoller)
+zonal_plots.py       Zonal mean contour plot function; defines LOG_SCALE_DECADES
 experiments/         One YAML per model run
-data/                CSV output (scalar/ and profiles/ subdirectories per experiment)
-figures/             PNG output (one subdirectory per experiment)
+data/                CSV output (scalar/, profiles/, aod/, zonal/ subdirectories per experiment)
+figures/             PNG output (one subdirectory per experiment, with aod/ and zonal/ sub-dirs)
 ```
 
 `compute.py` and `optics.py` contain no plotting or file I/O (except `optics.load_band_optics`). All grid geometry — pressure from hybrid coefficients, layer thickness, cell area, air mass — is computed in `compute.compute_geometry()` and passed downstream as a plain dict of DataArrays.

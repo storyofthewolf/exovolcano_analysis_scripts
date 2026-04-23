@@ -82,6 +82,8 @@ import config
 import compute
 import optics
 import aod_plots
+import zonal_plots
+from zonal_plots import LOG_SCALE_DECADES
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
 
@@ -163,6 +165,22 @@ def save_aod_zonal_csv(days, aod_zonal, lat, tag):
     print(f"  Saved AOD zonal  : {path}")
 
 
+def save_zonal_csv(data_2d, pressure_1d, lat_vals, name, actual_day):
+    """
+    Zonal mean snapshot. Rows=pressure levels, columns=latitudes.
+    First row: lat header. First column: pressure in mb.
+    """
+    path = os.path.join(data_dir, 'zonal', f"{name}_day{actual_day:07.2f}.csv")
+    p_mb = pressure_1d / 100.0
+    header = 'pressure_mb,' + ','.join(f"{v:.4f}" for v in lat_vals)
+    with open(path, 'w') as f:
+        f.write(header + '\n')
+        for i in range(len(p_mb)):
+            row = f"{p_mb[i]:.4f}," + ','.join(f"{v:.6e}" for v in data_2d[i])
+            f.write(row + '\n')
+    print(f"  Saved zonal  : {path}")
+
+
 # ---------------------------------------------------------------------------
 # Plot helpers
 # ---------------------------------------------------------------------------
@@ -237,16 +255,6 @@ def plot_profile_hovmoller(days, data_array, pressure_1d, name,
     plt.close()
     print(f"  Saved figure : {path}")
 
-
-# Log-scale colormap settings for profile Hovmoller plots.
-# Keys: variable name. Values: orders of magnitude below peak to show.
-# Variables not listed here use linear scale with 2nd-98th percentile clipping.
-LOG_SCALE_DECADES = {
-    'SO2':     4,
-    'H2SO4':   4,
-    'Q':       4,
-    'VOLCHZMD':4,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +421,38 @@ with ds:
             print(f"  Mie {label_mie}: Kext={kext_mie:.4f} cm²/g")
             tag_mie = f'{mie_wave:.3f}um_mie'.replace('.', 'p')
             _aod_diagnostics(kext_mie, label_mie, tag_mie)
+
+    # -----------------------------------------------------------------------
+    # Zonal mean snapshots
+    # -----------------------------------------------------------------------
+    print("\n--- Zonal mean snapshots ---")
+
+    if config.ZONAL_VARS and config.ZONAL_PERIODS:
+        os.makedirs(os.path.join(data_dir,    'zonal'), exist_ok=True)
+        os.makedirs(os.path.join(figures_dir, 'zonal'), exist_ok=True)
+
+        lat_vals       = ds['lat'].values
+        zonal_fig_dir  = os.path.join(figures_dir, 'zonal')
+
+        for var_cfg in config.ZONAL_VARS:
+            name = var_cfg['name']
+            if name not in ds.data_vars:
+                print(f"  WARNING: '{name}' not in dataset, skipping zonal mean.")
+                continue
+            units = ds[name].attrs.get('units', '')
+            for target_day in config.ZONAL_PERIODS:
+                data_2d, actual_day = compute.compute_zonal_mean(
+                    ds, name, days, float(target_day))
+                save_zonal_csv(data_2d, pressure_1d, lat_vals, name, actual_day)
+                tag = f"{name}_day{actual_day:07.2f}"
+                zonal_plots.plot_zonal_mean(
+                    lat_vals, pressure_1d, data_2d, name, units,
+                    actual_day, zonal_fig_dir,
+                    filename=f'zonal_{tag}.png',
+                    log_scale=(name in LOG_SCALE_DECADES),
+                )
+    else:
+        print("  No zonal_mean_vars or zonal_mean_periods configured, skipping.")
 
 print(f"\nDone. Figures in '{figures_dir}', data in '{data_dir}'.")
 print("\n!============= Exiting exovolcano time_series diagnostics =============!")

@@ -13,19 +13,29 @@
 # =============================================================================
 
 # Absolute path to the top-level archive directory.
-root_dir: '/path/to/cesm/archive/'
+root_dir: '/Users/wolfe/Desktop/projects/volcanos/'
 
 # Subdirectory under root_dir containing the NetCDF files.
 # For a standard CESM archive layout this is typically:
 #   'run_name/atm/hist'
-folder: 'run_name/atm/hist'
+folder: 'runs/modern_pintubao_std'
+
 
 # List of CAM h1 history filenames (basenames only, no directory).
 # The prefix before the first '.' is used as the experiment name for
 # output subdirectory naming, so all files must share the same prefix.
 file_pattern:
-  - 'run_name.cam.h1.0001-01-01-00000.nc'
-  - 'run_name.cam.h1.0001-04-11-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0001-01-01-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0001-04-11-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0001-07-20-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0001-10-28-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0002-02-05-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0002-05-16-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0002-08-24-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0002-12-02-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0003-03-12-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0003-06-20-00000.nc'
+  - 'cam_mixed_fv_modern_eruption.cam.h1.0003-09-28-00000.nc'  
   # add one line per file to include in the time series
 
 
@@ -138,21 +148,21 @@ volc_reff: 1.0
 # Bulk aerosol density [g/cm³].  Used only by the Mie calculation.
 # Sulfuric acid / water solution: ~1.84 g/cm³
 # Default: 1.84
-rho_aerosol: 1.84
+rho_aerosol: 1.7
 
 # Path to the pre-computed Mie optics NetCDF file (haze_n68_b40_mie.nc).
 # Set this to the actual path on your system to enable AOD output.
 # Omit this key (or set to null) to skip all AOD calculations.
-optics_file: '/path/to/haze_n68_b40_mie.nc'
+optics_file: 'data/optprops/volc_pw1975_n68_r1um_mie.nc'
 
 # ---------------------------------------------------------------------------
 # Optional: single-wavelength Mie AOD at a custom wavelength
 # Uncomment all three lines to enable.  Requires miepython to be installed.
 # Produces an additional timeseries and zonal Hovmoller plot pair.
 # ---------------------------------------------------------------------------
-# mie_wavelength_um: 0.55          # wavelength [µm]
-# mie_refractive_index_real: 1.43  # real part of complex refractive index
-# mie_refractive_index_imag: 0.0   # imaginary part (positive convention)
+mie_wavelength_um: 0.55          # wavelength [µm]
+mie_refractive_index_real: 1.43  # real part of complex refractive index
+mie_refractive_index_imag: 0.0   # imaginary part (positive convention)
 
 
 # =============================================================================
@@ -174,4 +184,4 @@ zonal_mean_vars:
   - name: VOLCHZMD
 
 zonal_mean_periods:
-  increment: [0, 1, 4, 10, 50, 100]   # days since start
+  increment: [0, 1, 4, 10, 50, 100, 200, 500, 800]   # days since start

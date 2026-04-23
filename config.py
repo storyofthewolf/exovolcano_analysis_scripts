@@ -48,7 +48,8 @@ def _load_config(path):
     return cfg
 
 
-_cfg = _load_config(_find_config_file())
+_config_path = _find_config_file()
+_cfg = _load_config(_config_path)
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +66,10 @@ FIGURES_DIR  = _cfg.get('figures_dir', 'figures')
 DATA_DIR     = _cfg.get('data_dir', 'data')
 
 # Variable lists: each entry is a dict with keys 'name' and 'method'
-SCALAR_VARS  = _cfg.get('scalar_vars', [])
-PROFILE_VARS = _cfg.get('profile_vars', [])
+SCALAR_VARS   = _cfg.get('scalar_vars', [])
+PROFILE_VARS  = _cfg.get('profile_vars', [])
+ZONAL_VARS    = _cfg.get('zonal_mean_vars', [])
+ZONAL_PERIODS = _cfg.get('zonal_mean_periods', {}).get('increment', [])
 
 # Aerosol optics
 OPTICS_FILE = _cfg.get('optics_file', None)
@@ -107,16 +110,9 @@ def get_file_list():
 
 
 def get_experiment_name():
-    """Returns the common filename prefix shared by all files in FILE_PATTERN."""
-    prefixes = {f.split('.')[0] for f in FILE_PATTERN}
-
-    if len(prefixes) > 1:
-        print(f"ERROR: Multiple file prefixes detected: {prefixes}")
-        sys.exit(1)
-    if len(prefixes) == 0:
-        print("ERROR: file_pattern is empty.")
-        sys.exit(1)
-
-    name = list(prefixes)[0]
+    """Returns the YAML filename stem as the experiment name.
+    e.g. 'experiments/ben2_vei7.yaml' -> 'ben2_vei7'
+    """
+    name = os.path.splitext(os.path.basename(_config_path))[0]
     print(f"Experiment name: {name}")
     return name

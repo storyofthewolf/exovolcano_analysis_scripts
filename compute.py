@@ -278,6 +278,33 @@ def compute_profile(ds, geom, name):
 
 
 # ---------------------------------------------------------------------------
+# Zonal mean snapshot
+# ---------------------------------------------------------------------------
+
+def compute_zonal_mean(ds, name, days, target_day):
+    """
+    Select the timestep nearest to target_day and return the zonal mean
+    (longitude mean) of variable name at that timestep.
+
+    Parameters
+    ----------
+    ds         : xr.Dataset
+    name       : str variable name
+    days       : np.ndarray (time,) days since start, from days_since_start()
+    target_day : float requested day
+
+    Returns
+    -------
+    data_2d    : np.ndarray (lev, lat)  zonal mean at selected timestep
+    actual_day : float                  actual day of selected timestep
+    """
+    i_time     = int(np.argmin(np.abs(days - target_day)))
+    actual_day = float(days[i_time])
+    data_2d    = ds[name].isel(time=i_time).mean(dim='lon').values   # (lev, lat)
+    return data_2d, actual_day
+
+
+# ---------------------------------------------------------------------------
 # Time coordinate utility
 # ---------------------------------------------------------------------------
 
