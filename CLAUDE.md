@@ -22,18 +22,38 @@ Outputs go to `figures/<exp_name>/` and `data/<exp_name>/` with subdirectories `
 
 The experiment name is derived from the YAML filename stem (e.g. `experiments/ben2_vei7.yaml` → `ben2_vei7`), not from the `file_pattern` prefix.
 
+### Runtime flags
+
+All flags are stripped from `sys.argv` before `config.py` is imported, so they are invisible to the YAML/config layer.
+
+| Flag | Effect |
+|------|--------|
+| `--time` | Print a per-section timing summary at the end |
+| `--nthreads N` | Use N dask threads (default: 8) |
+| `--no-scalars` | Skip scalar time series |
+| `--no-profiles` | Skip profile time series |
+| `--no-plots` | Skip all figure output (CSVs still written) |
+| `--no-aod` | Skip AOD calculation |
+| `--no-zonal` | Skip zonal mean snapshots |
+
+```bash
+# Typical fast cluster run
+python run_time_series.py ben2_vei7.yaml --nthreads 32 --no-zonal --time
+```
+
 ## Architecture
 
 The pipeline has six modules:
 
 **`config.py`** — Loads `experiments/<name>.yaml` at import time (via CLI arg, `CONFIG` env var, or default). Stores the resolved path as `_config_path`. Exposes path constants (`ROOT_DIR`, `FIGURES_DIR`, `DATA_DIR`), physical constants (`G_CONST`, `R_AIR`, `R_EARTH`), variable lists (`SCALAR_VARS`, `PROFILE_VARS`, `ZONAL_VARS`, `ZONAL_PERIODS`), and AOD parameters (`OPTICS_FILE`, `VOLC_REFF`, `RHO_AEROSOL`, `MIE_WAVE_UM`, `MIE_N_REAL`, `MIE_N_IMAG`). `get_experiment_name()` derives the name from the YAML filename stem via `_config_path`.
 
-**`compute.py`** — Pure computation engine; no I/O or side effects. Reads CAM NetCDF output via xarray, builds grid geometry from hybrid pressure coordinates, and computes global diagnostics. Key functions:
-- `load_dataset()` — opens multi-file CAM NetCDF as a lazy xarray Dataset; extracts `gw` (Gaussian weights) from the first file separately to avoid mfdataset inflation
-- `compute_geometry()` — builds pressure, layer thickness (dp), altitude (z_mid), cell area, air mass, and cell volume fields using explicit numpy broadcasting (not xarray) to avoid coordinate inflation bugs with mfdataset
-- `compute_scalar()` — dispatches to `mass_integral`, `volume_integral`, or `area_mean` reduction
-- `compute_profile()` — returns area-weighted mean over lat/lon, preserving `(time, lev)`
-- `compute_zonal_mean(ds, name, days, target_day)` — selects the nearest timestep to `target_day` and returns `(data_2d, actual_day)` where `data_2d` is `(lev, lat)` numpy array
+**`compute.py`** — Pure computation engine; no I/O or side effects. Reads CAM NetCDF output via xarray/dask, builds grid geometry from hybrid pressure coordinates, and computes global diagnostics. Key functions:
+- `load_dataset()` — opens multi-file CAM NetCDF as a lazy dask-backed xarray Dataset (`chunks={'time': 200}`); extracts `gw` (Gaussian weights) from the first file separately to avoid mfdataset inflation
+- `compute_geometry()` — builds pressure, layer thickness (dp), altitude (z_mid), cell area, air mass, and cell volume as **lazy dask-backed DataArrays** using explicit dask broadcasting (not xarray) to avoid coordinate inflation bugs with mfdataset. `PS` and `T` are kept as dask arrays — no eager `.values` load. The cumsum for `z_mid` uses `dask.array.cumsum`. Only first-timestep diagnostics trigger a `.compute()`.
+- `compute_scalar()` — returns a **lazy** DataArray (no `.load()`); caller batches with `dask.compute()`
+- `compute_profile()` — returns a **lazy** DataArray (no `.load()`); caller batches with `dask.compute()`
+- `preload_zonal_mean(ds, name)` — returns a lazy lon-mean DataArray; callers should batch multiple variables with `dask.compute()` before accessing `.values`
+- `compute_zonal_mean(days, target_day, zonal_np)` — slices a pre-loaded `(time, lev, lat)` numpy array; no I/O
 
 **`optics.py`** — Pure computation engine for aerosol optics; no plotting or I/O except `load_band_optics`. Key functions:
 - `load_band_optics(filepath)` — opens `haze_n68_b40_mie.nc`; `rbins` are stored in cm in that file and are converted to µm on load (`* 1e4`)
@@ -47,7 +67,20 @@ The pipeline has six modules:
 **`zonal_plots.py`** — Zonal mean contour plot function. Also defines `LOG_SCALE_DECADES` — the single authoritative dict of which variables use `LogNorm` and how many decades to span. `run_time_series.py` imports `LOG_SCALE_DECADES` from here for use in the Hovmoller plots too. Key function:
 - `plot_zonal_mean(lat, pressure_1d, data_2d, name, units, actual_day, figures_dir, filename, log_scale)` — contour plot with log-pressure y-axis (surface at bottom), latitude x-axis, same colormap logic as Hovmoller plots
 
-**`run_time_series.py`** — Orchestrator. Calls config → compute → optics → saves CSVs → makes quicklook plots. The `--help`/`-h` check happens before `config.py` is imported so it works without a YAML argument. Imports `LOG_SCALE_DECADES` from `zonal_plots`.
+**`run_time_series.py`** — Orchestrator. Parses runtime flags → calls config → compute → optics → saves CSVs → makes quicklook plots. Key behaviors:
+- All custom flags (`--time`, `--nthreads`, `--no-*`) are parsed and stripped from `sys.argv` before `config.py` is imported
+- Uses a **threaded dask scheduler** (`dask.config.set(scheduler='threads', num_workers=N)`); default 8 threads, overridden by `--nthreads N`
+- Scalars and profiles are collected as lazy DataArrays then materialized in a **single `dask.compute()` call each** — one parallel pass over all variables rather than one pass per variable
+- Zonal variables are all preloaded in a **single batched `dask.compute()` call** before the per-period loop
+- `pressure_1d` and `altitude_1d` are computed in a **single batched `dask.compute()` call**
+- Imports `LOG_SCALE_DECADES` from `zonal_plots` — do not define it in both places
+
+## Performance notes
+
+- `compute_scalar()` and `compute_profile()` return **lazy** DataArrays. Do not call `.load()` inside those functions — the orchestrator batches them with `dask.compute()`.
+- `preload_zonal_mean()` returns a **lazy** DataArray. Always batch multiple variables with `dask.compute()` before looping over periods.
+- The geometry arrays (`dp_pa`, `mid_p`, `dz`, `z_mid`, `air_mass_cell`, `cell_volume`) are dask-backed. Passing them into xarray reductions keeps the full graph lazy until `dask.compute()` is called.
+- On an HPC cluster, use `--nthreads 32` (or your core allocation) on a dedicated compute node (`salloc`). On a shared login node keep threads at 4–8 to avoid contention with other users.
 
 ## Experiment YAML Schema
 
@@ -105,7 +138,7 @@ figures/<exp>/
     zonal/      zonal_<var>_day<DAY>.png    — one contour plot per (var, day)
 ```
 
-Zonal CSV format: first row is header `pressure_mb, lat1, lat2, ...`; each subsequent row is one pressure level. Read with `pd.read_csv(path)`.
+Zonal CSV format: first row is header `pressure_mb, lat1, lat2, ...`; each subsequent row is one pressure level. Written with `pandas.DataFrame.to_csv()`. Read with `pd.read_csv(path)`.
 
 Profile CSVs write pressure and altitude coordinates as `# pressure_Pa:` and `# altitude_m:` comment lines before the column header (no NaN placeholders). Read in pandas with `pd.read_csv(path, comment='#')`.
 
@@ -114,7 +147,8 @@ Profile CSVs write pressure and altitude coordinates as `# pressure_Pa:` and `# 
 - **Physical constants are planet-specific**, not Earth-standard. Each experiment encodes its planet's gravity and radius (e.g., `g_const = 9.80665 * 0.93`). Do not substitute standard Earth values.
 - **VOLCHZMD** is sulfate aerosol mass density (g/cm³); `volume_integral` multiplies by 1000 to convert to kg/m³ before integrating. AOD uses it directly in g/cm³ with a CGS Kext.
 - **Gaussian weights (`gw`)**: CAM uses a Gaussian latitude grid. `gw` values sum to 2.0 and are used directly with xarray `.weighted()` for exact area-weighted means — no cosine-latitude approximation.
-- **Hybrid pressure coordinates**: Pressure is computed from `hyam`, `hybm`, `hyai`, `hybi`, and `PS` using explicit numpy broadcasting, not xarray operations, to avoid a known mfdataset coordinate inflation bug.
+- **Hybrid pressure coordinates**: Pressure is computed from `hyam`, `hybm`, `hyai`, `hybi`, and `PS` using explicit **dask array** broadcasting (not xarray), to avoid a known mfdataset coordinate inflation bug. `PS` and `T` are never loaded eagerly — they remain dask arrays throughout `compute_geometry()`.
+- **Lazy geometry**: All 4D geometry fields returned by `compute_geometry()` are dask-backed DataArrays. Downstream reductions in `compute_scalar()` and `compute_profile()` are also lazy; the orchestrator triggers computation via batched `dask.compute()` calls.
 - **Profile Hovmoller plots and zonal mean plots**: log-pressure y-axis, surface at bottom. Variables in `LOG_SCALE_DECADES` (SO2, H2SO4, Q, VOLCHZMD) use `LogNorm` colormaps anchored at the data peak; others use linear with 2nd–98th percentile clipping. `LOG_SCALE_DECADES` is defined in `zonal_plots.py` and imported by `run_time_series.py` — do not define it in both places.
 - **Experiment name** is the YAML filename stem (`_config_path` in `config.py`), not the `file_pattern` prefix. `get_experiment_name()` uses `os.path.splitext(os.path.basename(_config_path))[0]`.
 - **`rbins` unit bug in optics file**: `haze_n68_b40_mie.nc` labels `rbins` as microns but the values are in centimetres. `load_band_optics` applies `* 1e4` on load to correct this.

@@ -5,7 +5,7 @@ Post-processing diagnostics for CAM volcanic eruption simulations. Reads CAM `h1
 ## Requirements
 
 - Python 3.9+
-- `numpy`, `xarray`, `matplotlib`, `pyyaml`, `netcdf4`
+- `numpy`, `xarray`, `dask`, `matplotlib`, `pandas`, `pyyaml`, `netcdf4`
 - `miepython` — only needed if using the optional Mie AOD calculation
 
 ## Running
@@ -37,15 +37,33 @@ Any combination of these flags can be appended to the command:
 | `--no-aod` | Skip AOD calculation |
 | `--no-zonal` | Skip zonal mean snapshots |
 
-These flags override the YAML config — you do not need to comment out YAML sections to skip a step. They are particularly useful on the cluster where zonal mean snapshots are expensive:
+These flags override the YAML config — you do not need to comment out YAML sections to skip a step:
 
 ```bash
-# Skip the two most expensive sections for a fast diagnostic pass
+# Fast diagnostic pass — skip the two most expensive sections
 python run_time_series.py ben2_vei7.yaml --no-zonal --no-aod --time
 
 # Write CSVs only, no figures
 python run_time_series.py ben2_vei7.yaml --no-plots
+
+# Full run with timing on an allocated compute node
+python run_time_series.py ben2_vei7.yaml --nthreads 32 --time
 ```
+
+## Performance
+
+The pipeline uses a multithreaded dask scheduler for all reductions (scalars, profiles, geometry, zonal means). All major computation stages are batched into single parallel dask passes — multiple variables are computed together rather than one at a time. Grid geometry (`compute_geometry`) is fully lazy: pressure, layer thickness, and altitude are built as dask arrays and only evaluated when needed, avoiding large upfront memory allocations.
+
+Typical runtimes for a ~1000-timestep run at 96×144 grid:
+
+| Environment | Threads | Total time |
+|-------------|---------|------------|
+| MacBook Pro | 8 | ~15 s |
+| HPC login node (shared) | 8 | 150–340 s (variable due to contention) |
+| HPC compute node (`salloc`) | 8 | ~185 s |
+| HPC compute node (`salloc`) | 32 | ~50 s |
+
+On the login node, timing variance is high because threads compete with other users. For consistent performance, claim a compute node interactively with `salloc` and pass `--nthreads` to match your allocation.
 
 ## Experiments
 
@@ -138,7 +156,7 @@ zonal_mean_periods:
   increment: [0, 1, 4, 10, 50, 100]   # days since start
 ```
 
-Both sections must be present to enable zonal output. Omitting either silently skips the section.
+Both sections must be present to enable zonal output. Omitting either silently skips the section. Use `--no-zonal` at runtime to skip without editing the YAML.
 
 ### AOD calculation (optional)
 
@@ -190,10 +208,10 @@ Two plots are produced per wavelength:
 
 | Filename | Contents |
 |----------|----------|
-| `quicklook_aod_550nm_band_timeseries.png` | Global mean AOD at 550 nm (band-interpolated Kext) |
-| `quicklook_aod_550nm_band_zonal_hovmoller.png` | Zonal mean AOD vs time (linear latitude axis) |
-| `quicklook_aod_<W>um_mie_timeseries.png` | Global mean AOD at `mie_wavelength_um` (Mie Kext) |
-| `quicklook_aod_<W>um_mie_zonal_hovmoller.png` | Zonal mean AOD at `mie_wavelength_um` vs time |
+| `aod/aod_550nm_band_timeseries.png` | Global mean AOD at 550 nm (band-interpolated Kext) |
+| `aod/aod_550nm_band_zonal_hovmoller.png` | Zonal mean AOD vs time (linear latitude axis) |
+| `aod/aod_<W>um_mie_timeseries.png` | Global mean AOD at `mie_wavelength_um` (Mie Kext) |
+| `aod/aod_<W>um_mie_zonal_hovmoller.png` | Zonal mean AOD at `mie_wavelength_um` vs time |
 
 The Mie pair is only produced when `mie_wavelength_um` is set in the YAML.
 
@@ -210,7 +228,7 @@ pressure_mb, -90.0000, -87.5000, ..., 90.0000
 ...
 ```
 
-Read in pandas with `pd.read_csv(path)`. The `pressure_mb` column gives the layer midpoint pressure in mb (time- and area-mean from the first timestep).
+Read in pandas with `pd.read_csv(path)`. The `pressure_mb` column gives the layer midpoint pressure in mb (time- and area-mean).
 
 ---
 
@@ -232,26 +250,11 @@ The optics file `haze_n68_b40_mie.nc` contains pre-computed Mie extinction effic
 When `mie_wavelength_um` is set, `miepython` computes Kext directly:
 
 ```
-x      = 2π × r_eff / λ
 m      = n_real - i × |n_imag|    (miepython sign convention)
 Kext   = Q_ext × 3 / (4 × r_eff_cm × ρ_bulk)   [cm²/g]
 ```
 
 This is useful for wavelengths outside the optics table or for sensitivity tests with different refractive indices.
-
-## Running on an HPC cluster
-
-The script uses a threaded dask scheduler. By default it uses 8 threads, which works well on both a laptop and an interactively-allocated compute node (`salloc`). Increase the thread count when you have more cores available:
-
-```bash
-# Default (8 threads)
-python run_time_series.py ben2_vei7.yaml --time
-
-# On an allocated compute node with more cores
-python run_time_series.py ben2_vei7.yaml --nthreads 32 --time
-```
-
-On the login node, keep threads low (4–8) — the login node is shared and higher thread counts cause contention with other users, making runs slower and more variable.
 
 ---
 
@@ -269,4 +272,4 @@ data/                CSV output (scalar/, profiles/, aod/, zonal/ subdirectories
 figures/             PNG output (one subdirectory per experiment, with aod/ and zonal/ sub-dirs)
 ```
 
-`compute.py` and `optics.py` contain no plotting or file I/O (except `optics.load_band_optics`). All grid geometry — pressure from hybrid coefficients, layer thickness, cell area, air mass — is computed in `compute.compute_geometry()` and passed downstream as a plain dict of DataArrays.
+`compute.py` and `optics.py` contain no plotting or file I/O (except `optics.load_band_optics`). All grid geometry — pressure from hybrid coefficients, layer thickness, cell area, air mass — is computed in `compute.compute_geometry()` as lazy dask-backed DataArrays and passed downstream as a plain dict. Reductions over multiple variables (scalars, profiles, zonal means) are batched into single `dask.compute()` calls so the scheduler can parallelize across chunks in one pass.
