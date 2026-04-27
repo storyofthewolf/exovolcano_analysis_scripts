@@ -4,52 +4,6 @@
 run_time_series.py - Orchestrator for exovolcano time series analysis.
 
 Usage:
-    python run_time_series.py ben2_vei7.yaml
-"""
-
-import sys
-import time as _time
-import datetime as _datetime
-
-_t_start_wall = _time.perf_counter()
-_t_start_dt   = _datetime.datetime.now()
-
-# Parse all custom flags before config.py sees sys.argv
-_timing_enabled = '--time' in sys.argv
-if _timing_enabled:
-    sys.argv.remove('--time')
-
-_SKIP_FLAGS = {'--no-zonal', '--no-aod', '--no-profiles', '--no-scalars', '--no-plots'}
-_skips = _SKIP_FLAGS & set(sys.argv)
-for _f in _skips:
-    sys.argv.remove(_f)
-
-_n_workers = 8
-if '--nthreads' in sys.argv:
-    _i = sys.argv.index('--nthreads')
-    _n_workers = int(sys.argv[_i + 1])
-    sys.argv[_i:_i + 2] = []
-
-_skip_scalars  = '--no-scalars'  in _skips
-_skip_profiles = '--no-profiles' in _skips
-_skip_plots    = '--no-plots'    in _skips
-_skip_aod      = '--no-aod'      in _skips
-_skip_zonal    = '--no-zonal'    in _skips
-
-_timings: dict = {}   # label -> elapsed seconds (insertion order = print order)
-
-def _tick(label):
-    """Start a named timer. Returns a stop callable."""
-    if not _timing_enabled:
-        return lambda: None
-    t0 = _time.perf_counter()
-    def _tock():
-        _timings[label] = _timings.get(label, 0.0) + (_time.perf_counter() - t0)
-    return _tock
-
-if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
-    print("""
-Usage:
     python run_time_series.py <experiment>.yaml
     python run_time_series.py experiments/<experiment>.yaml
     CONFIG=experiments/<experiment>.yaml python run_time_series.py
@@ -63,9 +17,7 @@ Required YAML keys
   root_dir      Absolute path to the top-level CESM archive directory.
   folder        Subdirectory under root_dir containing the NetCDF files
                 (e.g. 'run_name/atm/hist').
-  file_pattern  List of CAM h1 history filenames (basenames).  All files
-                must share the same prefix; that prefix becomes the
-                experiment name used for output subdirectories.
+  file_pattern  List of CAM h1 history filenames (basenames).
   g_const       Surface gravity [m/s²].
   r_air         Specific gas constant of the atmosphere [J/kg/K].
   r_earth       Mean planet radius [m].
@@ -74,8 +26,8 @@ Optional YAML keys (defaults in parentheses)
 --------------------------------------------
   figures_dir   Root directory for PNG output  ('figures').
   data_dir      Root directory for CSV output  ('data').
-  optics_file   Path to volc_pw1975_n68_r1.0um_mie.nc.  Set this to enable AOD
-                calculations; omit or set to null to skip AOD entirely.
+  optics_file   Path to volc_pw1975_n68_r1.0um_mie.nc.  Set to enable AOD;
+                omit or set to null to skip AOD entirely.
   volc_reff     Effective particle radius [µm] for Kext lookup  (1.0).
   rho_aerosol   Bulk aerosol density [g/cm³], used by Mie path  (1.84).
   mie_wavelength_um          Wavelength [µm] for optional single-wavelength
@@ -97,27 +49,88 @@ scalar_vars / profile_vars sections
 
     profile_vars:
       - name: T
-        method: area_mean         # global mean profile (time × lev)
+        method: area_mean         # global mean profile (time x lev)
 
   method options:  mass_integral | volume_integral | area_mean
+"""
 
-Runtime flags (can be combined)
---------------------------------
-  --time           Print a per-section timing summary at the end.
-  --nthreads N     Use N dask threads (default: 8). Increase on an allocated
-                   compute node; keep low (4-8) on a shared login node.
-  --no-scalars     Skip scalar time series (computation + CSV output).
-  --no-profiles    Skip profile time series (computation + CSV output).
-  --no-plots       Skip all figure output (CSV data is still written).
-  --no-aod         Skip AOD calculation.
-  --no-zonal       Skip zonal mean snapshots (expensive on large datasets).
+import sys
+import time as _time
+import datetime as _datetime
+import argparse
 
-Example
--------
-    python run_time_series.py t1d_vei7.yaml
-    python run_time_series.py t1d_vei7.yaml --nthreads 32 --no-zonal --time
-""")
+# Wall-clock start captured before any imports so timing includes import cost.
+_t_start_wall = _time.perf_counter()
+_t_start_dt   = _datetime.datetime.now()
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+_parser = argparse.ArgumentParser(
+    prog='run_time_series.py',
+    description='Post-processing diagnostics for CAM volcanic eruption simulations.',
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+)
+_parser.add_argument(
+    'config', nargs='?', metavar='experiment.yaml',
+    help='Experiment YAML (name looked up in experiments/, or full path). '
+         'Overrides CONFIG env var.',
+)
+_parser.add_argument(
+    '--nthreads', type=int, default=8, metavar='N',
+    help='Dask thread count (default: 8). Use 32 on a dedicated compute node.',
+)
+_parser.add_argument('--time',             action='store_true', help='Print per-section timing summary.')
+_parser.add_argument('--no-scalars',       action='store_true', help='Skip scalar time series.')
+_parser.add_argument('--no-profiles',      action='store_true', help='Skip profile time series.')
+_parser.add_argument('--no-plots',         action='store_true', help='Skip all figure output (CSVs still written).')
+_parser.add_argument('--no-aod',           action='store_true', help='Skip AOD calculation.')
+_parser.add_argument('--no-zonal',         action='store_true', help='Skip zonal mean snapshots.')
+_parser.add_argument('--list-experiments', action='store_true', help='List available experiment YAMLs and exit.')
+
+_args = _parser.parse_args()
+
+if _args.list_experiments:
+    import glob as _glob
+    _yamls = sorted(_glob.glob('experiments/*.yaml'))
+    if _yamls:
+        print("Available experiments:")
+        for _y in _yamls:
+            print(f"  {_y.split('/')[-1]}")
+    else:
+        print("No YAML files found in experiments/")
     sys.exit(0)
+
+_timing_enabled = _args.time
+_n_workers      = _args.nthreads
+_skip_scalars   = _args.no_scalars
+_skip_profiles  = _args.no_profiles
+_skip_plots     = _args.no_plots
+_skip_aod       = _args.no_aod
+_skip_zonal     = _args.no_zonal
+
+# Rewrite sys.argv so config.py (which reads sys.argv[1]) sees only the YAML.
+sys.argv = [sys.argv[0]] + ([_args.config] if _args.config else [])
+
+# ---------------------------------------------------------------------------
+# Timing helpers
+# ---------------------------------------------------------------------------
+
+_timings: dict = {}   # label -> elapsed seconds (insertion order = print order)
+
+def _tick(label):
+    """Start a named timer. Returns a stop callable."""
+    if not _timing_enabled:
+        return lambda: None
+    t0 = _time.perf_counter()
+    def _tock():
+        _timings[label] = _timings.get(label, 0.0) + (_time.perf_counter() - t0)
+    return _tock
+
+# ---------------------------------------------------------------------------
+# Remaining imports  (after arg parsing so dask is configured correctly)
+# ---------------------------------------------------------------------------
 
 import os
 import numpy as np
@@ -140,10 +153,16 @@ import aod_plots
 import zonal_plots
 from zonal_plots import LOG_SCALE_DECADES
 
+# ---------------------------------------------------------------------------
+# Startup banner
+# ---------------------------------------------------------------------------
+
 print("\n!============= Running exovolcano time_series diagnostics =============!")
 print(f"Dask scheduler  : threaded  ({_n_workers} threads)")
-if _skips:
-    print(f"Skipping        : {' '.join(f.replace('--no-', '') for f in sorted(_skips))}")
+_active_skips = [f for f in ('scalars', 'profiles', 'plots', 'aod', 'zonal')
+                 if getattr(_args, f'no_{f}')]
+if _active_skips:
+    print(f"Skipping        : {' '.join(_active_skips)}")
 
 # ---------------------------------------------------------------------------
 # Setup
