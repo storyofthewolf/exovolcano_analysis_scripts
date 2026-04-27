@@ -23,6 +23,29 @@ CONFIG=experiments/ben2_vei7.yaml python run_time_series.py
 
 Outputs are written under `figures/<exp_name>/` and `data/<exp_name>/`.
 
+### Runtime flags
+
+Any combination of these flags can be appended to the command:
+
+| Flag | Effect |
+|------|--------|
+| `--time` | Print a per-section timing summary at the end |
+| `--no-scalars` | Skip scalar time series (computation + CSV) |
+| `--no-profiles` | Skip profile time series (computation + CSV) |
+| `--no-plots` | Skip all figure output (CSV data is still written) |
+| `--no-aod` | Skip AOD calculation |
+| `--no-zonal` | Skip zonal mean snapshots |
+
+These flags override the YAML config — you do not need to comment out YAML sections to skip a step. They are particularly useful on the cluster where zonal mean snapshots are expensive:
+
+```bash
+# Skip the two most expensive sections for a fast diagnostic pass
+python run_time_series.py ben2_vei7.yaml --no-zonal --no-aod --time
+
+# Write CSVs only, no figures
+python run_time_series.py ben2_vei7.yaml --no-plots
+```
+
 ## Experiments
 
 **All configuration — including AOD settings — lives in the experiment YAML file** passed on the command line. There is no separate config file to edit. To enable a feature, add the corresponding keys to your YAML.
@@ -214,6 +237,86 @@ Kext   = Q_ext × 3 / (4 × r_eff_cm × ρ_bulk)   [cm²/g]
 ```
 
 This is useful for wavelengths outside the optics table or for sensitivity tests with different refractive indices.
+
+---
+
+## Running on an HPC cluster
+
+### Login node vs. batch job
+
+**Avoid running on the login node for full production runs.** Login nodes are shared across all users on the cluster. Running a compute-heavy script there means:
+
+- Your dask threads compete with other users' processes for CPU time, causing 2–4× run-to-run timing variance even with identical code and data.
+- Sustained CPU usage on a login node is against policy on most HPC systems (SLURM, PBS, LSF) and may result in your process being killed or your account flagged.
+- Lustre I/O from the login node is uncontested for bandwidth but the metadata server is shared — opening many files in parallel can degrade performance for other users.
+
+Use the login node only for quick tests (`--no-zonal --no-aod`) and for developing/debugging. Submit a batch job for full runs.
+
+### Controlling dask thread count
+
+The script uses a threaded dask scheduler. The number of workers defaults to `min(8, cpu_count)` but can be overridden with the `DASK_WORKERS` environment variable:
+
+```bash
+# Login node — keep low to avoid contention
+DASK_WORKERS=4 python run_time_series.py ben2_vei7.yaml --time
+
+# Batch job — set to your allocated core count
+DASK_WORKERS=32 python run_time_series.py ben2_vei7.yaml --time
+```
+
+### Example SLURM batch script
+
+Save as `submit_analysis.sh` and submit with `sbatch submit_analysis.sh`:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=exovol_analysis
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16       # dask threads — adjust to what you need
+#SBATCH --mem=64G                # set based on dataset size; 32–64 GB typical
+#SBATCH --time=01:00:00          # walltime limit
+#SBATCH --output=logs/%j_analysis.out
+#SBATCH --error=logs/%j_analysis.err
+
+# Activate your Python environment
+source activate exovol            # or: module load python; source /path/to/venv/bin/activate
+
+# Tell the script how many cores it has
+export DASK_WORKERS=$SLURM_CPUS_PER_TASK
+
+# Run the analysis
+python run_time_series.py ben2_vei7.yaml --time
+```
+
+Adjust `--cpus-per-task` and `--mem` to match your dataset. A 1000-timestep run at 96×144 grid with 5 scalar variables and 5 profile variables typically needs 32–64 GB and runs in under 60 s with 16 dedicated cores.
+
+### Example PBS/Torque batch script
+
+```bash
+#!/bin/bash
+#PBS -N exovol_analysis
+#PBS -l select=1:ncpus=16:mem=64gb
+#PBS -l walltime=01:00:00
+#PBS -o logs/analysis.out
+#PBS -e logs/analysis.err
+
+cd $PBS_O_WORKDIR
+source activate exovol
+
+export DASK_WORKERS=16
+python run_time_series.py ben2_vei7.yaml --time
+```
+
+### Quick interactive job (srun)
+
+For interactive testing with a dedicated core allocation:
+
+```bash
+srun --ntasks=1 --cpus-per-task=8 --mem=32G --time=00:30:00 --pty bash
+source activate exovol
+export DASK_WORKERS=8
+python run_time_series.py ben2_vei7.yaml --no-zonal --time
+```
 
 ---
 

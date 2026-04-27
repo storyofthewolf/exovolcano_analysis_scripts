@@ -14,10 +14,21 @@ import datetime as _datetime
 _t_start_wall = _time.perf_counter()
 _t_start_dt   = _datetime.datetime.now()
 
-# --time flag: strip before config.py parses sys.argv
+# --time and --no-* flags: strip all before config.py parses sys.argv
 _timing_enabled = '--time' in sys.argv
 if _timing_enabled:
     sys.argv.remove('--time')
+
+_SKIP_FLAGS = {'--no-zonal', '--no-aod', '--no-profiles', '--no-scalars', '--no-plots'}
+_skips = _SKIP_FLAGS & set(sys.argv)
+for _f in _skips:
+    sys.argv.remove(_f)
+
+_skip_scalars  = '--no-scalars'  in _skips
+_skip_profiles = '--no-profiles' in _skips
+_skip_plots    = '--no-plots'    in _skips
+_skip_aod      = '--no-aod'      in _skips
+_skip_zonal    = '--no-zonal'    in _skips
 
 _timings: dict = {}   # label -> elapsed seconds (insertion order = print order)
 
@@ -84,9 +95,19 @@ scalar_vars / profile_vars sections
 
   method options:  mass_integral | volume_integral | area_mean
 
+Runtime flags (can be combined)
+--------------------------------
+  --time         Print a per-section timing summary at the end.
+  --no-scalars   Skip scalar time series (computation + CSV output).
+  --no-profiles  Skip profile time series (computation + CSV output).
+  --no-plots     Skip all figure output (CSV data is still written).
+  --no-aod       Skip AOD calculation.
+  --no-zonal     Skip zonal mean snapshots (expensive on large datasets).
+
 Example
 -------
     python run_time_series.py t1d_vei7.yaml
+    python run_time_series.py t1d_vei7.yaml --no-zonal --no-aod --time
 """)
     sys.exit(0)
 
@@ -102,10 +123,11 @@ import dask
 import dask.config
 import pandas as pd
 
-# Use all available cores for dask reductions.
-# The threaded scheduler is safe for numpy/xarray and avoids process-spawn
-# overhead. On a login node this alone can cut scalar/profile time by 4-8x.
-_n_workers = min(32, os.cpu_count() or 4)
+# Thread count for dask reductions.
+# Override with DASK_WORKERS=N in your environment.
+# On a shared login node, keep this low (4-8) to avoid contention with other
+# users. In a dedicated batch job, set it to your allocated core count.
+_n_workers = int(os.environ.get('DASK_WORKERS', min(8, os.cpu_count() or 4)))
 dask.config.set(scheduler='threads', num_workers=_n_workers)
 
 import config
@@ -117,6 +139,8 @@ from zonal_plots import LOG_SCALE_DECADES
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
 print(f"Dask scheduler  : threaded  ({_n_workers} workers)")
+if _skips:
+    print(f"Skipping        : {' '.join(f.replace('--no-', '') for f in sorted(_skips))}")
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -318,25 +342,28 @@ with ds:
     print("\n--- Scalar time series ---")
     scalars = {}
 
-    _stop = _tick("Scalar time series")
-    _scalar_lazy  = {}   # name -> lazy DataArray
-    _scalar_units = {}
-    for var_cfg in config.SCALAR_VARS:
-        name   = var_cfg['name']
-        method = var_cfg['method']
-        print(f"  Computing {name} ({method})...")
-        result = compute.compute_scalar(ds, geom, name, method)
-        if result is not None:
-            _scalar_lazy[name]  = result
-            _scalar_units[name] = ds[name].attrs.get('units', '') if name in ds else ''
+    if _skip_scalars:
+        print("  Skipped (--no-scalars).")
+    else:
+        _stop = _tick("Scalar time series")
+        _scalar_lazy  = {}   # name -> lazy DataArray
+        _scalar_units = {}
+        for var_cfg in config.SCALAR_VARS:
+            name   = var_cfg['name']
+            method = var_cfg['method']
+            print(f"  Computing {name} ({method})...")
+            result = compute.compute_scalar(ds, geom, name, method)
+            if result is not None:
+                _scalar_lazy[name]  = result
+                _scalar_units[name] = ds[name].attrs.get('units', '') if name in ds else ''
 
-    # Single dask pass for all scalar variables
-    if _scalar_lazy:
-        _computed = dask.compute(*_scalar_lazy.values())
-        scalars = dict(zip(_scalar_lazy.keys(), _computed))
-        for name, result in scalars.items():
-            save_scalar_csv(days, result, name, _scalar_units[name])
-    _stop()
+        # Single dask pass for all scalar variables
+        if _scalar_lazy:
+            _computed = dask.compute(*_scalar_lazy.values())
+            scalars = dict(zip(_scalar_lazy.keys(), _computed))
+            for name, result in scalars.items():
+                save_scalar_csv(days, result, name, _scalar_units[name])
+        _stop()
 
     # -----------------------------------------------------------------------
     # Profile time series
@@ -344,22 +371,25 @@ with ds:
     print("\n--- Profile time series ---")
     profiles = {}
 
-    _stop = _tick("Profile time series")
-    _profile_lazy = {}
-    for var_cfg in config.PROFILE_VARS:
-        name = var_cfg['name']
-        print(f"  Computing profile {name}...")
-        result = compute.compute_profile(ds, geom, name)
-        if result is not None:
-            _profile_lazy[name] = result
+    if _skip_profiles:
+        print("  Skipped (--no-profiles).")
+    else:
+        _stop = _tick("Profile time series")
+        _profile_lazy = {}
+        for var_cfg in config.PROFILE_VARS:
+            name = var_cfg['name']
+            print(f"  Computing profile {name}...")
+            result = compute.compute_profile(ds, geom, name)
+            if result is not None:
+                _profile_lazy[name] = result
 
-    # Single dask pass for all profile variables
-    if _profile_lazy:
-        _computed = dask.compute(*_profile_lazy.values())
-        profiles = dict(zip(_profile_lazy.keys(), _computed))
-        for name, result in profiles.items():
-            save_profile_csv(days, result, name, pressure_1d, altitude_1d)
-    _stop()
+        # Single dask pass for all profile variables
+        if _profile_lazy:
+            _computed = dask.compute(*_profile_lazy.values())
+            profiles = dict(zip(_profile_lazy.keys(), _computed))
+            for name, result in profiles.items():
+                save_profile_csv(days, result, name, pressure_1d, altitude_1d)
+        _stop()
 
     # Always include VOLCHZMD profile if variable exists
 #    if 'VOLCHZMD' in ds.data_vars and 'VOLCHZMD' not in profiles:
@@ -374,53 +404,56 @@ with ds:
     # -----------------------------------------------------------------------
     print("\n--- Quicklook plots ---")
 
-    _stop = _tick("Quicklook plots")
-    sulfur_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
-    sulfur = {k: scalars[k] for k in sulfur_vars if k in scalars}
-    if sulfur:
-        total = sum(sulfur.values())
-        plot_scalar_series(days, dict(sulfur, Total=total),
-                           title='Global Total Sulfur Budget',
-                           ylabel='Mass (kg)',
-                           filename='quicklook_sulfur_budget.png')
+    if _skip_plots:
+        print("  Skipped (--no-plots).")
+    else:
+        _stop = _tick("Quicklook plots")
+        sulfur_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
+        sulfur = {k: scalars[k] for k in sulfur_vars if k in scalars}
+        if sulfur:
+            total = sum(sulfur.values())
+            plot_scalar_series(days, dict(sulfur, Total=total),
+                               title='Global Total Sulfur Budget',
+                               ylabel='Mass (kg)',
+                               filename='quicklook_sulfur_budget.png')
 
-    for name in ['TS', 'TGCLDLWP', 'TMQ']:
-        if name in scalars:
+        for name in ['TS', 'TGCLDLWP', 'TMQ']:
+            if name in scalars:
+                units = ds[name].attrs.get('units', '') if name in ds else ''
+                plot_scalar_series(days, {name: scalars[name]},
+                                   title=f'Global Mean {name}',
+                                   ylabel=units,
+                                   filename=f'quicklook_{name}.png')
+
+        if 'Q' in scalars:
+            plot_scalar_series(days, {'Q': scalars['Q']},
+                               title='Global Total Water Vapor Mass',
+                               ylabel='Mass (kg)',
+                               filename='quicklook_Q_mass.png')
+
+        # Hovmoller profile plots (log-pressure y-axis)
+        for var_cfg in config.PROFILE_VARS + [{'name': n} for n in profiles if n not in [v['name'] for v in config.PROFILE_VARS]]:
+            name = var_cfg['name']
+            if name not in profiles:
+                continue
+            da    = profiles[name]
             units = ds[name].attrs.get('units', '') if name in ds else ''
-            plot_scalar_series(days, {name: scalars[name]},
-                               title=f'Global Mean {name}',
-                               ylabel=units,
-                               filename=f'quicklook_{name}.png')
-
-    if 'Q' in scalars:
-        plot_scalar_series(days, {'Q': scalars['Q']},
-                           title='Global Total Water Vapor Mass',
-                           ylabel='Mass (kg)',
-                           filename='quicklook_Q_mass.png')
-
-    # -----------------------------------------------------------------------
-    # Quicklook - Hovmoller profile plots (log-pressure y-axis)
-    # -----------------------------------------------------------------------
-    for var_cfg in config.PROFILE_VARS + [{'name': n} for n in profiles if n not in [v['name'] for v in config.PROFILE_VARS]]:
-        name = var_cfg['name']
-        if name not in profiles:
-            continue
-        da    = profiles[name]
-        units = ds[name].attrs.get('units', '') if name in ds else ''
-        plot_profile_hovmoller(
-            days, da, pressure_1d, name,
-            filename=f'quicklook_profile_{name}.png',
-            log_scale=(name in LOG_SCALE_DECADES),
-            units=units,
-        )
-    _stop()
+            plot_profile_hovmoller(
+                days, da, pressure_1d, name,
+                filename=f'quicklook_profile_{name}.png',
+                log_scale=(name in LOG_SCALE_DECADES),
+                units=units,
+            )
+        _stop()
 
     # -----------------------------------------------------------------------
     # AOD
     # -----------------------------------------------------------------------
     print("\n--- AOD ---")
 
-    if config.OPTICS_FILE is None:
+    if _skip_aod:
+        print("  Skipped (--no-aod).")
+    elif config.OPTICS_FILE is None:
         print("  WARNING: 'optics_file' not set in config. Skipping AOD calculations.")
     elif 'VOLCHZMD' not in ds.data_vars:
         print("  WARNING: 'VOLCHZMD' not found in dataset. Skipping AOD calculations.")
@@ -489,7 +522,9 @@ with ds:
     # -----------------------------------------------------------------------
     print("\n--- Zonal mean snapshots ---")
 
-    if config.ZONAL_VARS and config.ZONAL_PERIODS:
+    if _skip_zonal:
+        print("  Skipped (--no-zonal).")
+    elif config.ZONAL_VARS and config.ZONAL_PERIODS:
         os.makedirs(os.path.join(data_dir,    'zonal'), exist_ok=True)
         os.makedirs(os.path.join(figures_dir, 'zonal'), exist_ok=True)
 
