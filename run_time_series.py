@@ -341,17 +341,19 @@ with ds:
     _stop()
 
     # -----------------------------------------------------------------------
-    # Scalar time series
+    # Scalar + Profile time series  (single combined dask pass)
     # -----------------------------------------------------------------------
+    # Scalars and profiles are built as lazy graphs here, then materialised
+    # together in one dask.compute() call so all variables share a single
+    # Lustre read pass over the dataset.
     print("\n--- Scalar time series ---")
     scalars = {}
+    _scalar_lazy  = {}
+    _scalar_units = {}
 
     if _skip_scalars:
         print("  Skipped (--no-scalars).")
     else:
-        _stop = _tick("Scalar time series")
-        _scalar_lazy  = {}   # name -> lazy DataArray
-        _scalar_units = {}
         for var_cfg in config.SCALAR_VARS:
             name   = var_cfg['name']
             method = var_cfg['method']
@@ -361,25 +363,13 @@ with ds:
                 _scalar_lazy[name]  = result
                 _scalar_units[name] = ds[name].attrs.get('units', '') if name in ds else ''
 
-        # Single dask pass for all scalar variables
-        if _scalar_lazy:
-            _computed = dask.compute(*_scalar_lazy.values())
-            scalars = dict(zip(_scalar_lazy.keys(), _computed))
-            for name, result in scalars.items():
-                save_scalar_csv(days, result, name, _scalar_units[name])
-        _stop()
-
-    # -----------------------------------------------------------------------
-    # Profile time series
-    # -----------------------------------------------------------------------
     print("\n--- Profile time series ---")
     profiles = {}
+    _profile_lazy = {}
 
     if _skip_profiles:
         print("  Skipped (--no-profiles).")
     else:
-        _stop = _tick("Profile time series")
-        _profile_lazy = {}
         for var_cfg in config.PROFILE_VARS:
             name = var_cfg['name']
             print(f"  Computing profile {name}...")
@@ -387,10 +377,22 @@ with ds:
             if result is not None:
                 _profile_lazy[name] = result
 
-        # Single dask pass for all profile variables
-        if _profile_lazy:
-            _computed = dask.compute(*_profile_lazy.values())
-            profiles = dict(zip(_profile_lazy.keys(), _computed))
+    # Single dask pass for all scalars + profiles combined
+    _all_lazy = {**{'s_' + k: v for k, v in _scalar_lazy.items()},
+                 **{'p_' + k: v for k, v in _profile_lazy.items()}}
+
+    if _all_lazy:
+        _stop = _tick("Scalar + Profile time series")
+        _computed = dask.compute(*_all_lazy.values())
+        _all_computed = dict(zip(_all_lazy.keys(), _computed))
+
+        scalars  = {k[2:]: v for k, v in _all_computed.items() if k.startswith('s_')}
+        profiles = {k[2:]: v for k, v in _all_computed.items() if k.startswith('p_')}
+
+        if not _skip_scalars:
+            for name, result in scalars.items():
+                save_scalar_csv(days, result, name, _scalar_units[name])
+        if not _skip_profiles:
             for name, result in profiles.items():
                 save_profile_csv(days, result, name, pressure_1d, altitude_1d)
         _stop()
@@ -576,9 +578,14 @@ if _timing_enabled:
     _total      = _t_end_wall - _t_start_wall
     _tracked    = sum(_timings.values())
 
-    _W = 54  # box width
+    _right_w  = 20
+    _pad      = 4   # two spaces each side
+    _labels   = [f"{l}:" for l in list(_timings.keys()) + ["Other (imports/overhead)"]]
+    _label_w  = max(len(l) for l in _labels + ["Started :", "Finished:", "Total   :"])
+    _W        = _pad + _label_w + _right_w  # box inner width, no fixed constant
+
     def _row(left, right='', fill=' '):
-        inner = f"  {left:<28}{right:>20}  "
+        inner = f"  {left:<{_label_w}}{right:>{_right_w}}  "
         return f"║{inner:{fill}<{_W}}║"
 
     print()
@@ -591,11 +598,11 @@ if _timing_enabled:
     print(f"╠{'':=<{_W}}╣")
     for _label, _secs in _timings.items():
         _pct = 100.0 * _secs / _total if _total > 0 else 0.0
-        print(_row(f"{_label}:", f"{_secs:>8,.1f} s  ({_pct:5.1f}%)"))
+        print(_row(f"{_label}:", f"{_secs:,.1f} s  ({_pct:5.1f}%)"))
     _other = _total - _tracked
     if _other > 0.05:
         _pct = 100.0 * _other / _total
-        print(_row("Other (imports/overhead):", f"{_other:>8,.1f} s  ({_pct:5.1f}%)"))
+        print(_row("Other (imports/overhead):", f"{_other:,.1f} s  ({_pct:5.1f}%)"))
     print(f"╚{'':=<{_W}}╝")
 
 print("\n!============= Exiting exovolcano time_series diagnostics =============!")
