@@ -8,6 +8,27 @@ Usage:
 """
 
 import sys
+import time as _time
+import datetime as _datetime
+
+_t_start_wall = _time.perf_counter()
+_t_start_dt   = _datetime.datetime.now()
+
+# --time flag: strip before config.py parses sys.argv
+_timing_enabled = '--time' in sys.argv
+if _timing_enabled:
+    sys.argv.remove('--time')
+
+_timings: dict = {}   # label -> elapsed seconds (insertion order = print order)
+
+def _tick(label):
+    """Start a named timer. Returns a stop callable."""
+    if not _timing_enabled:
+        return lambda: None
+    t0 = _time.perf_counter()
+    def _tock():
+        _timings[label] = _timings.get(label, 0.0) + (_time.perf_counter() - t0)
+    return _tock
 
 if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
     print("""
@@ -91,6 +112,7 @@ print("\n!============= Running exovolcano time_series diagnostics =============
 # Setup
 # ---------------------------------------------------------------------------
 
+_stop = _tick("Setup")
 file_list = config.get_file_list()
 if not file_list:
     raise SystemExit("No files found. Check config.")
@@ -104,6 +126,7 @@ os.makedirs(os.path.join(data_dir,    'scalar'),   exist_ok=True)
 os.makedirs(os.path.join(data_dir,    'profiles'), exist_ok=True)
 os.makedirs(os.path.join(data_dir,    'aod'),      exist_ok=True)
 os.makedirs(os.path.join(figures_dir, 'aod'),      exist_ok=True)
+_stop()
 
 print(f"\nExperiment : {exp_name}")
 print(f"Figures    : {figures_dir}")
@@ -261,17 +284,21 @@ def plot_profile_hovmoller(days, data_array, pressure_1d, name,
 # Main
 # ---------------------------------------------------------------------------
 
+_stop = _tick("Load dataset")
 ds, gw_values = compute.load_dataset(file_list)
+_stop()
 
 with ds:
     days = compute.days_since_start(ds)
 
     print("Computing grid geometry...")
+    _stop = _tick("Geometry")
     geom = compute.compute_geometry(ds, gw_values)
 
     # Time-mean, area-mean pressure and altitude profiles for CSV output
     pressure_1d = geom['mid_p'].mean(dim=['time', 'lat', 'lon']).compute().values
     altitude_1d = geom['z_mid'].mean(dim=['time', 'lat', 'lon']).compute().values
+    _stop()
 
     # -----------------------------------------------------------------------
     # Scalar time series
@@ -279,6 +306,7 @@ with ds:
     print("\n--- Scalar time series ---")
     scalars = {}
 
+    _stop = _tick("Scalar time series")
     for var_cfg in config.SCALAR_VARS:
         name   = var_cfg['name']
         method = var_cfg['method']
@@ -288,6 +316,7 @@ with ds:
             scalars[name] = result
             units = ds[name].attrs.get('units', '') if name in ds else ''
             save_scalar_csv(days, result, name, units)
+    _stop()
 
     # -----------------------------------------------------------------------
     # Profile time series
@@ -295,6 +324,7 @@ with ds:
     print("\n--- Profile time series ---")
     profiles = {}
 
+    _stop = _tick("Profile time series")
     for var_cfg in config.PROFILE_VARS:
         name = var_cfg['name']
         print(f"  Computing profile {name}...")
@@ -302,6 +332,7 @@ with ds:
         if result is not None:
             profiles[name] = result
             save_profile_csv(days, result, name, pressure_1d, altitude_1d)
+    _stop()
 
     # Always include VOLCHZMD profile if variable exists
 #    if 'VOLCHZMD' in ds.data_vars and 'VOLCHZMD' not in profiles:
@@ -316,6 +347,7 @@ with ds:
     # -----------------------------------------------------------------------
     print("\n--- Quicklook plots ---")
 
+    _stop = _tick("Quicklook plots")
     sulfur_vars = ['SO2', 'H2SO4', 'VOLCHZMD']
     sulfur = {k: scalars[k] for k in sulfur_vars if k in scalars}
     if sulfur:
@@ -354,6 +386,7 @@ with ds:
             log_scale=(name in LOG_SCALE_DECADES),
             units=units,
         )
+    _stop()
 
     # -----------------------------------------------------------------------
     # AOD
@@ -365,6 +398,7 @@ with ds:
     elif 'VOLCHZMD' not in ds.data_vars:
         print("  WARNING: 'VOLCHZMD' not found in dataset. Skipping AOD calculations.")
     else:
+        _stop = _tick("AOD")
         band_optics    = optics.load_band_optics(config.OPTICS_FILE)
         volchzmd_vals  = ds['VOLCHZMD'].values   # (time, lev, lat, lon) [g/cm³]
         dz_vals        = geom['dz'].values        # (time, lev, lat, lon) [m]
@@ -421,6 +455,7 @@ with ds:
             print(f"  Mie {label_mie}: Kext={kext_mie:.4f} cm²/g")
             tag_mie = f'{mie_wave:.3f}um_mie'.replace('.', 'p')
             _aod_diagnostics(kext_mie, label_mie, tag_mie)
+        _stop()
 
     # -----------------------------------------------------------------------
     # Zonal mean snapshots
@@ -434,6 +469,7 @@ with ds:
         lat_vals       = ds['lat'].values
         zonal_fig_dir  = os.path.join(figures_dir, 'zonal')
 
+        _stop = _tick("Zonal mean snapshots")
         for var_cfg in config.ZONAL_VARS:
             name = var_cfg['name']
             if name not in ds.data_vars:
@@ -451,8 +487,38 @@ with ds:
                     filename=f'zonal_{tag}.png',
                     log_scale=(name in LOG_SCALE_DECADES),
                 )
+        _stop()
     else:
         print("  No zonal_mean_vars or zonal_mean_periods configured, skipping.")
 
 print(f"\nDone. Figures in '{figures_dir}', data in '{data_dir}'.")
+
+if _timing_enabled:
+    _t_end_wall = _time.perf_counter()
+    _t_end_dt   = _datetime.datetime.now()
+    _total      = _t_end_wall - _t_start_wall
+    _tracked    = sum(_timings.values())
+
+    _W = 54  # box width
+    def _row(left, right='', fill=' '):
+        inner = f"  {left:<28}{right:>20}  "
+        return f"║{inner:{fill}<{_W}}║"
+
+    print()
+    print(f"╔{'':=<{_W}}╗")
+    print(f"║{'  Runtime Summary':<{_W}}║")
+    print(f"╠{'':=<{_W}}╣")
+    print(_row("Started :", _t_start_dt.strftime('%Y-%m-%d %H:%M:%S')))
+    print(_row("Finished:", _t_end_dt.strftime('%Y-%m-%d %H:%M:%S')))
+    print(_row("Total   :", f"{_total:,.1f} s"))
+    print(f"╠{'':=<{_W}}╣")
+    for _label, _secs in _timings.items():
+        _pct = 100.0 * _secs / _total if _total > 0 else 0.0
+        print(_row(f"{_label}:", f"{_secs:>8,.1f} s  ({_pct:5.1f}%)"))
+    _other = _total - _tracked
+    if _other > 0.05:
+        _pct = 100.0 * _other / _total
+        print(_row("Other (imports/overhead):", f"{_other:>8,.1f} s  ({_pct:5.1f}%)"))
+    print(f"╚{'':=<{_W}}╝")
+
 print("\n!============= Exiting exovolcano time_series diagnostics =============!")
