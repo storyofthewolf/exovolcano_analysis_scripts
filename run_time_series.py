@@ -341,19 +341,17 @@ with ds:
     _stop()
 
     # -----------------------------------------------------------------------
-    # Scalar + Profile time series  (single combined dask pass)
+    # Scalar time series
     # -----------------------------------------------------------------------
-    # Scalars and profiles are built as lazy graphs here, then materialised
-    # together in one dask.compute() call so all variables share a single
-    # Lustre read pass over the dataset.
     print("\n--- Scalar time series ---")
     scalars = {}
-    _scalar_lazy  = {}
-    _scalar_units = {}
 
     if _skip_scalars:
         print("  Skipped (--no-scalars).")
     else:
+        _stop = _tick("Scalar time series")
+        _scalar_lazy  = {}
+        _scalar_units = {}
         for var_cfg in config.SCALAR_VARS:
             name   = var_cfg['name']
             method = var_cfg['method']
@@ -363,13 +361,24 @@ with ds:
                 _scalar_lazy[name]  = result
                 _scalar_units[name] = ds[name].attrs.get('units', '') if name in ds else ''
 
+        if _scalar_lazy:
+            _computed = dask.compute(*_scalar_lazy.values())
+            scalars = dict(zip(_scalar_lazy.keys(), _computed))
+            for name, result in scalars.items():
+                save_scalar_csv(days, result, name, _scalar_units[name])
+        _stop()
+
+    # -----------------------------------------------------------------------
+    # Profile time series
+    # -----------------------------------------------------------------------
     print("\n--- Profile time series ---")
     profiles = {}
-    _profile_lazy = {}
 
     if _skip_profiles:
         print("  Skipped (--no-profiles).")
     else:
+        _stop = _tick("Profile time series")
+        _profile_lazy = {}
         for var_cfg in config.PROFILE_VARS:
             name = var_cfg['name']
             print(f"  Computing profile {name}...")
@@ -377,22 +386,9 @@ with ds:
             if result is not None:
                 _profile_lazy[name] = result
 
-    # Single dask pass for all scalars + profiles combined
-    _all_lazy = {**{'s_' + k: v for k, v in _scalar_lazy.items()},
-                 **{'p_' + k: v for k, v in _profile_lazy.items()}}
-
-    if _all_lazy:
-        _stop = _tick("Scalar + Profile time series")
-        _computed = dask.compute(*_all_lazy.values())
-        _all_computed = dict(zip(_all_lazy.keys(), _computed))
-
-        scalars  = {k[2:]: v for k, v in _all_computed.items() if k.startswith('s_')}
-        profiles = {k[2:]: v for k, v in _all_computed.items() if k.startswith('p_')}
-
-        if not _skip_scalars:
-            for name, result in scalars.items():
-                save_scalar_csv(days, result, name, _scalar_units[name])
-        if not _skip_profiles:
+        if _profile_lazy:
+            _computed = dask.compute(*_profile_lazy.values())
+            profiles = dict(zip(_profile_lazy.keys(), _computed))
             for name, result in profiles.items():
                 save_profile_csv(days, result, name, pressure_1d, altitude_1d)
         _stop()
