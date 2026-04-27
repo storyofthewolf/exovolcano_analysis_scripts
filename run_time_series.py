@@ -498,17 +498,11 @@ with ds:
                 print(f"  WARNING: '{name}' not in dataset, skipping zonal mean.")
                 continue
             units    = ds[name].attrs.get('units', '')
-            _stop_z  = _tick(f"  Zonal preload {name}")
             zonal_np = compute.preload_zonal_mean(ds, name)   # one I/O pass per var
-            _stop_z()
-            _stop_csv  = _tick(f"  Zonal CSV {name}")
-            _stop_plot = _tick(f"  Zonal plot {name}")
             for target_day in config.ZONAL_PERIODS:
                 data_2d, actual_day = compute.compute_zonal_mean(
                     days, float(target_day), zonal_np)
-                _stop_plot(); _stop_csv()
                 save_zonal_csv(data_2d, pressure_1d, lat_vals, name, actual_day)
-                _stop_csv = _tick(f"  Zonal CSV {name}")
                 tag = f"{name}_day{actual_day:07.2f}"
                 zonal_plots.plot_zonal_mean(
                     lat_vals, pressure_1d, data_2d, name, units,
@@ -516,8 +510,6 @@ with ds:
                     filename=f'zonal_{tag}.png',
                     log_scale=(name in LOG_SCALE_DECADES),
                 )
-                _stop_plot = _tick(f"  Zonal plot {name}")
-            _stop_csv(); _stop_plot()
         _stop()
     else:
         print("  No zonal_mean_vars or zonal_mean_periods configured, skipping.")

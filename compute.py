@@ -25,6 +25,7 @@ Public API:
 """
 
 import numpy as np
+import dask.array as da
 import xarray as xr
 from config import G_CONST, R_AIR, R_EARTH
 
@@ -46,14 +47,18 @@ def load_dataset(file_list):
     with xr.open_dataset(file_list[0], engine='netcdf4') as ds0:
         gw_values = ds0['gw'].values.ravel()
 
-    ds = xr.open_mfdataset(
-        file_list,
-        combine='by_coords',
-        parallel=False,
-        chunks={'time': 200},
-        engine='netcdf4',
-        data_vars='minimal',
-    )
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=FutureWarning,
+                                message='.*compat.*')
+        ds = xr.open_mfdataset(
+            file_list,
+            combine='by_coords',
+            parallel=False,
+            chunks={'time': 200},
+            engine='netcdf4',
+            data_vars='minimal',
+        )
     print(f"Loaded {len(file_list)} file(s). Times: {len(ds['time'])}")
     return ds, gw_values
 
@@ -93,8 +98,9 @@ def compute_geometry(ds, gw_values):
     """
     Compute all grid geometry needed for mass and area integrals.
 
-    Pressure arrays are built with explicit numpy broadcasting from hybrid
-    coefficients loaded as plain 1D arrays, bypassing mfdataset inflation.
+    Pressure arrays are built with explicit dask broadcasting from hybrid
+    coefficients loaded as plain 1D numpy arrays, bypassing mfdataset inflation.
+    All 4D fields (mid_p, dp_pa, dz, z_mid) are lazy dask-backed DataArrays.
 
     dp_pa = p_lower_interface - p_upper_interface  (always positive)
     air_mass_cell = (dp_pa / g) * cell_area        (always positive)
@@ -124,75 +130,83 @@ def compute_geometry(ds, gw_values):
                                 attrs={'units': 'm^2', 'long_name': 'grid cell area'})
 
     # --- Hybrid coordinate arrays ---
-    # These are time-invariant 1D fields. mfdataset does not inflate them
-    # since they are identical across files. .ravel() guarantees 1D numpy.
+    # Time-invariant 1D fields; safe to load eagerly as plain numpy.
+    # .ravel() guarantees 1D even if mfdataset adds a spurious dimension.
     hyam = ds['hyam'].values.ravel()   # (lev,)
     hybm = ds['hybm'].values.ravel()
     hyai = ds['hyai'].values.ravel()   # (ilev,) = (lev+1,)
     hybi = ds['hybi'].values.ravel()
     P0   = float(np.asarray(ds['P0'].values).flat[0])
 
-    # --- Pressure fields [Pa] via explicit numpy broadcasting ---
-    PS   = ds['PS'].values   # (time, lat, lon)
+    # --- Pressure fields [Pa] via dask broadcasting ---
+    # PS is kept as a dask array (no .values) so all downstream geometry
+    # remains lazy and parallelisable across chunks.
+    PS_da = ds['PS'].data   # dask array (time, lat, lon)
 
-    # mid_p [Pa]: (time, lev, lat, lon)
-    mid_p_np = (hyam[np.newaxis, :, np.newaxis, np.newaxis] * P0
-                + hybm[np.newaxis, :, np.newaxis, np.newaxis] * PS[:, np.newaxis, :, :])
+    # Promote 1D numpy coefficients to dask for broadcasting.
+    hyam_d = da.from_array(hyam, chunks=hyam.shape)   # (lev,)
+    hybm_d = da.from_array(hybm, chunks=hybm.shape)
+    hyai_d = da.from_array(hyai, chunks=hyai.shape)   # (ilev,)
+    hybi_d = da.from_array(hybi, chunks=hybi.shape)
 
-    # ilev_p [Pa]: (time, ilev, lat, lon)
-    ilev_p_np = (hyai[np.newaxis, :, np.newaxis, np.newaxis] * P0
-                 + hybi[np.newaxis, :, np.newaxis, np.newaxis] * PS[:, np.newaxis, :, :])
+    # (time, lev, lat, lon) via explicit axis insertion — same algebra as
+    # the old numpy version, avoids mfdataset coordinate inflation.
+    mid_p_da = (hyam_d[np.newaxis, :, np.newaxis, np.newaxis] * P0
+                + hybm_d[np.newaxis, :, np.newaxis, np.newaxis] * PS_da[:, np.newaxis, :, :])
 
-    # dp_pa [Pa]: lower interface minus upper interface → always positive
-    # layer k: lower = ilev_p[:, k+1, :, :], upper = ilev_p[:, k, :, :]
-    dp_pa_np = ilev_p_np[:, 1:, :, :] - ilev_p_np[:, :-1, :, :]   # (time, lev, lat, lon)
+    ilev_p_da = (hyai_d[np.newaxis, :, np.newaxis, np.newaxis] * P0
+                 + hybi_d[np.newaxis, :, np.newaxis, np.newaxis] * PS_da[:, np.newaxis, :, :])
+
+    dp_pa_da = ilev_p_da[:, 1:, :, :] - ilev_p_da[:, :-1, :, :]   # (time, lev, lat, lon)
 
     coords4d = dict(time=ds['time'], lev=ds['lev'], lat=ds['lat'], lon=ds['lon'])
     dims4d   = ['time', 'lev', 'lat', 'lon']
 
-    mid_p = xr.DataArray(mid_p_np,  coords=coords4d, dims=dims4d,
+    mid_p = xr.DataArray(mid_p_da, coords=coords4d, dims=dims4d,
                          attrs={'units': 'Pa', 'long_name': 'layer midpoint pressure'})
-    dp_pa = xr.DataArray(dp_pa_np,  coords=coords4d, dims=dims4d,
+    dp_pa = xr.DataArray(dp_pa_da, coords=coords4d, dims=dims4d,
                          attrs={'units': 'Pa', 'long_name': 'layer pressure thickness (positive)'})
 
     # --- Air mass per cell [kg] ---
-    air_mass_cell = (dp_pa / G_CONST) * cell_area_2d   # (dp_pa > 0, area > 0 → positive)
+    air_mass_cell = (dp_pa / G_CONST) * cell_area_2d
 
     # --- Layer thickness dz [m] from ideal gas law ---
-    T_np    = ds['T'].values   # (time, lev, lat, lon)
-    dz_np   = (R_AIR * T_np * dp_pa_np) / (G_CONST * mid_p_np)   # positive
+    # T is also kept lazy — no .values.
+    T_da   = ds['T'].data   # dask array (time, lev, lat, lon)
+    dz_da  = (R_AIR * T_da * dp_pa_da) / (G_CONST * mid_p_da)
 
-    dz = xr.DataArray(dz_np, coords=coords4d, dims=dims4d,
+    dz = xr.DataArray(dz_da, coords=coords4d, dims=dims4d,
                       attrs={'units': 'm', 'long_name': 'layer thickness'})
 
     # --- Midpoint altitude z_mid [m] via upward cumsum ---
     # lev index 0 = model top, nlev-1 = lowest layer (near surface).
     # Flip so index 0 = surface, cumsum upward, flip back.
-    dz_flip  = dz_np[:, ::-1, :, :]                               # surface first
-    z_iface  = np.concatenate([
-        np.zeros((dz_np.shape[0], 1, dz_np.shape[2], dz_np.shape[3])),
-        np.cumsum(dz_flip, axis=1)
-    ], axis=1)                                                     # (time, nlev+1, lat, lon)
-    z_mid_np = 0.5 * (z_iface[:, :-1, :, :] + z_iface[:, 1:, :, :])
-    z_mid_np = z_mid_np[:, ::-1, :, :]                            # restore top-first
+    dz_flip  = dz_da[:, ::-1, :, :]
+    zeros    = da.zeros((dz_da.shape[0], 1, dz_da.shape[2], dz_da.shape[3]),
+                        chunks=(dz_da.chunks[0], (1,), dz_da.chunks[2], dz_da.chunks[3]),
+                        dtype=dz_da.dtype)
+    z_iface  = da.concatenate([zeros, da.cumsum(dz_flip, axis=1)], axis=1)
+    z_mid_da = 0.5 * (z_iface[:, :-1, :, :] + z_iface[:, 1:, :, :])
+    z_mid_da = z_mid_da[:, ::-1, :, :]   # restore top-first
 
-    z_mid = xr.DataArray(z_mid_np, coords=coords4d, dims=dims4d,
+    z_mid = xr.DataArray(z_mid_da, coords=coords4d, dims=dims4d,
                          attrs={'units': 'm', 'long_name': 'layer midpoint altitude'})
 
-    cell_volume = cell_area_2d * dz   # [m^3]
+    cell_volume = cell_area_2d * dz
 
-    # --- Diagnostics ---
-    ps_mean    = float(PS[0].mean())
-    z_sfc      = float(z_mid_np[0, -1, :, :].mean())
-    z_top      = float(z_mid_np[0,  0, :, :].mean())
-    total_area = float(cell_area_np.sum())
+    # --- Diagnostics (cheap: first timestep only, triggers minimal I/O) ---
+    ps0      = PS_da[0].compute()
+    dp0      = dp_pa_da[0].compute()
+    z_mid0   = z_mid_da[0].compute()
+    ps_mean  = float(ps0.mean())
+    z_sfc    = float(z_mid0[-1].mean())
+    z_top    = float(z_mid0[0].mean())
+    total_area  = float(cell_area_np.sum())
     expect_area = 4.0 * np.pi * R_EARTH**2
 
-    # Mass conservation check: sum(dp_k * area / g) should equal sum(PS * area / g)
-    # i.e. sum of layer masses = total atmospheric mass
-    col_dp_sum  = dp_pa_np[0].sum(axis=0)              # (nlat, nlon): sum of dp over lev
-    mass_from_dp = (col_dp_sum * cell_area_np / G_CONST).sum()
-    mass_from_ps = (PS[0] * cell_area_np / G_CONST).sum()
+    col_dp_sum   = dp0.sum(axis=0)
+    mass_from_dp = float((col_dp_sum * cell_area_np / G_CONST).sum())
+    mass_from_ps = float((ps0 * cell_area_np / G_CONST).sum())
 
     print(f"  Geometry: mean(PS)={ps_mean:.1f} Pa | z_sfc={z_sfc:.0f} m | z_top={z_top:.0f} m")
     print(f"  Area check : {total_area:.6e} m^2  (expect {expect_area:.6e},"
