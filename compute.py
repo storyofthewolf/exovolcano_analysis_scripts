@@ -17,8 +17,10 @@ Public API:
     load_dataset(file_list)                  -> (xr.Dataset, gw_values)
     compute_area_mean(da, gw_values)         -> DataArray (lev, or scalar per time)
     compute_geometry(ds, gw_values)          -> dict
-    compute_scalar(ds, geom, name, method)   -> DataArray(time)
-    compute_profile(ds, geom, name)          -> DataArray(time, lev)
+    compute_scalar(ds, geom, name, method)   -> DataArray(time)  [lazy]
+    compute_profile(ds, geom, name)          -> DataArray(time, lev)  [lazy]
+    preload_zonal_mean(ds, name)             -> np.ndarray(time, lev, lat)
+    compute_zonal_mean(days, target_day, zonal_np) -> (data_2d, actual_day)
     days_since_start(ds)                     -> np.ndarray(float)
 """
 
@@ -48,7 +50,7 @@ def load_dataset(file_list):
         file_list,
         combine='by_coords',
         parallel=False,
-        chunks={'time': 100},
+        chunks={'time': 200},
         engine='netcdf4',
         data_vars='minimal',
     )
@@ -243,15 +245,15 @@ def compute_scalar(ds, geom, name, method):
 
     if method == 'mass_integral':
         ref = geom['air_mass_cell'].reindex_like(var)
-        return (var * ref).sum(dim=['lev', 'lat', 'lon'], skipna=True).load()
+        return (var * ref).sum(dim=['lev', 'lat', 'lon'], skipna=True)
 
     elif method == 'volume_integral':
         ref = geom['cell_volume'].reindex_like(var)
         scale = 1000.0 if name == 'VOLCHZMD' else 1.0   # g/cm^3 -> kg/m^3
-        return (var * ref * scale).sum(dim=['lev', 'lat', 'lon'], skipna=True).load()
+        return (var * ref * scale).sum(dim=['lev', 'lat', 'lon'], skipna=True)
 
     elif method == 'area_mean':
-        return compute_area_mean(var, geom['gw_values']).load()
+        return compute_area_mean(var, geom['gw_values'])
 
     else:
         print(f"  WARNING: Unknown method '{method}' for '{name}', skipping.")
@@ -274,24 +276,34 @@ def compute_profile(ds, geom, name):
     if 'lev' not in var.dims:
         print(f"  WARNING: '{name}' has no 'lev' dimension, skipping profile.")
         return None
-    return compute_area_mean(var, geom['gw_values']).load()
+    return compute_area_mean(var, geom['gw_values'])
 
 
 # ---------------------------------------------------------------------------
 # Zonal mean snapshot
 # ---------------------------------------------------------------------------
 
-def compute_zonal_mean(ds, name, days, target_day):
+def preload_zonal_mean(ds, name):
     """
-    Select the timestep nearest to target_day and return the zonal mean
-    (longitude mean) of variable name at that timestep.
+    Load the full longitude-mean of variable name into memory as a numpy array.
+    Call this once per variable before looping over target days.
+
+    Returns
+    -------
+    np.ndarray (time, lev, lat)
+    """
+    return ds[name].mean(dim='lon').values
+
+
+def compute_zonal_mean(days, target_day, zonal_np):
+    """
+    Select the timestep nearest to target_day from a pre-loaded zonal array.
 
     Parameters
     ----------
-    ds         : xr.Dataset
-    name       : str variable name
     days       : np.ndarray (time,) days since start, from days_since_start()
     target_day : float requested day
+    zonal_np   : np.ndarray (time, lev, lat) from preload_zonal_mean()
 
     Returns
     -------
@@ -300,7 +312,7 @@ def compute_zonal_mean(ds, name, days, target_day):
     """
     i_time     = int(np.argmin(np.abs(days - target_day)))
     actual_day = float(days[i_time])
-    data_2d    = ds[name].isel(time=i_time).mean(dim='lon').values   # (lev, lat)
+    data_2d    = zonal_np[i_time]   # (lev, lat)
     return data_2d, actual_day
 
 

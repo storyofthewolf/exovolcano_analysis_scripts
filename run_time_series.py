@@ -98,6 +98,15 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
 import xarray as xr
+import dask
+import dask.config
+import pandas as pd
+
+# Use all available cores for dask reductions.
+# The threaded scheduler is safe for numpy/xarray and avoids process-spawn
+# overhead. On a login node this alone can cut scalar/profile time by 4-8x.
+_n_workers = min(32, os.cpu_count() or 4)
+dask.config.set(scheduler='threads', num_workers=_n_workers)
 
 import config
 import compute
@@ -107,6 +116,7 @@ import zonal_plots
 from zonal_plots import LOG_SCALE_DECADES
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
+print(f"Dask scheduler  : threaded  ({_n_workers} workers)")
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -195,12 +205,9 @@ def save_zonal_csv(data_2d, pressure_1d, lat_vals, name, actual_day):
     """
     path = os.path.join(data_dir, 'zonal', f"{name}_day{actual_day:07.2f}.csv")
     p_mb = pressure_1d / 100.0
-    header = 'pressure_mb,' + ','.join(f"{v:.4f}" for v in lat_vals)
-    with open(path, 'w') as f:
-        f.write(header + '\n')
-        for i in range(len(p_mb)):
-            row = f"{p_mb[i]:.4f}," + ','.join(f"{v:.6e}" for v in data_2d[i])
-            f.write(row + '\n')
+    cols = {f"{v:.4f}": data_2d[:, i] for i, v in enumerate(lat_vals)}
+    df   = pd.DataFrame({'pressure_mb': p_mb, **cols})
+    df.to_csv(path, index=False, float_format='%.6e')
     print(f"  Saved zonal  : {path}")
 
 
@@ -307,15 +314,23 @@ with ds:
     scalars = {}
 
     _stop = _tick("Scalar time series")
+    _scalar_lazy  = {}   # name -> lazy DataArray
+    _scalar_units = {}
     for var_cfg in config.SCALAR_VARS:
         name   = var_cfg['name']
         method = var_cfg['method']
         print(f"  Computing {name} ({method})...")
         result = compute.compute_scalar(ds, geom, name, method)
         if result is not None:
-            scalars[name] = result
-            units = ds[name].attrs.get('units', '') if name in ds else ''
-            save_scalar_csv(days, result, name, units)
+            _scalar_lazy[name]  = result
+            _scalar_units[name] = ds[name].attrs.get('units', '') if name in ds else ''
+
+    # Single dask pass for all scalar variables
+    if _scalar_lazy:
+        _computed = dask.compute(*_scalar_lazy.values())
+        scalars = dict(zip(_scalar_lazy.keys(), _computed))
+        for name, result in scalars.items():
+            save_scalar_csv(days, result, name, _scalar_units[name])
     _stop()
 
     # -----------------------------------------------------------------------
@@ -325,12 +340,19 @@ with ds:
     profiles = {}
 
     _stop = _tick("Profile time series")
+    _profile_lazy = {}
     for var_cfg in config.PROFILE_VARS:
         name = var_cfg['name']
         print(f"  Computing profile {name}...")
         result = compute.compute_profile(ds, geom, name)
         if result is not None:
-            profiles[name] = result
+            _profile_lazy[name] = result
+
+    # Single dask pass for all profile variables
+    if _profile_lazy:
+        _computed = dask.compute(*_profile_lazy.values())
+        profiles = dict(zip(_profile_lazy.keys(), _computed))
+        for name, result in profiles.items():
             save_profile_csv(days, result, name, pressure_1d, altitude_1d)
     _stop()
 
@@ -475,11 +497,18 @@ with ds:
             if name not in ds.data_vars:
                 print(f"  WARNING: '{name}' not in dataset, skipping zonal mean.")
                 continue
-            units = ds[name].attrs.get('units', '')
+            units    = ds[name].attrs.get('units', '')
+            _stop_z  = _tick(f"  Zonal preload {name}")
+            zonal_np = compute.preload_zonal_mean(ds, name)   # one I/O pass per var
+            _stop_z()
+            _stop_csv  = _tick(f"  Zonal CSV {name}")
+            _stop_plot = _tick(f"  Zonal plot {name}")
             for target_day in config.ZONAL_PERIODS:
                 data_2d, actual_day = compute.compute_zonal_mean(
-                    ds, name, days, float(target_day))
+                    days, float(target_day), zonal_np)
+                _stop_plot(); _stop_csv()
                 save_zonal_csv(data_2d, pressure_1d, lat_vals, name, actual_day)
+                _stop_csv = _tick(f"  Zonal CSV {name}")
                 tag = f"{name}_day{actual_day:07.2f}"
                 zonal_plots.plot_zonal_mean(
                     lat_vals, pressure_1d, data_2d, name, units,
@@ -487,6 +516,8 @@ with ds:
                     filename=f'zonal_{tag}.png',
                     log_scale=(name in LOG_SCALE_DECADES),
                 )
+                _stop_plot = _tick(f"  Zonal plot {name}")
+            _stop_csv(); _stop_plot()
         _stop()
     else:
         print("  No zonal_mean_vars or zonal_mean_periods configured, skipping.")
