@@ -329,11 +329,12 @@ with ds:
     _stop = _tick("Geometry")
     geom = compute.compute_geometry(ds, gw_values)
 
-    # Time-mean, area-mean pressure and altitude profiles for CSV output
-    # Batched into one dask pass to halve Lustre read overhead.
+    # Area-mean pressure and altitude profiles for CSV/plot labeling.
+    # Use first timestep only — time variation is negligible for axis labels
+    # and this avoids a full-dataset scan over all timesteps.
     _p1d, _z1d = dask.compute(
-        geom['mid_p'].mean(dim=['time', 'lat', 'lon']),
-        geom['z_mid'].mean(dim=['time', 'lat', 'lon']),
+        geom['mid_p'].isel(time=0).mean(dim=['lat', 'lon']),
+        geom['z_mid'].isel(time=0).mean(dim=['lat', 'lon']),
     )
     pressure_1d = _p1d.values
     altitude_1d = _z1d.values

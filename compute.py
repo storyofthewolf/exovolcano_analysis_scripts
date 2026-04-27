@@ -194,10 +194,8 @@ def compute_geometry(ds, gw_values):
 
     cell_volume = cell_area_2d * dz
 
-    # --- Diagnostics (cheap: first timestep only, triggers minimal I/O) ---
-    ps0      = PS_da[0].compute()
-    dp0      = dp_pa_da[0].compute()
-    z_mid0   = z_mid_da[0].compute()
+    # --- Diagnostics (cheap: first timestep only, batched into one I/O pass) ---
+    ps0, dp0, z_mid0 = da.compute(PS_da[0], dp_pa_da[0], z_mid_da[0])
     ps_mean  = float(ps0.mean())
     z_sfc    = float(z_mid0[-1].mean())
     z_top    = float(z_mid0[0].mean())
