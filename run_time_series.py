@@ -303,8 +303,13 @@ with ds:
     geom = compute.compute_geometry(ds, gw_values)
 
     # Time-mean, area-mean pressure and altitude profiles for CSV output
-    pressure_1d = geom['mid_p'].mean(dim=['time', 'lat', 'lon']).compute().values
-    altitude_1d = geom['z_mid'].mean(dim=['time', 'lat', 'lon']).compute().values
+    # Batched into one dask pass to halve Lustre read overhead.
+    _p1d, _z1d = dask.compute(
+        geom['mid_p'].mean(dim=['time', 'lat', 'lon']),
+        geom['z_mid'].mean(dim=['time', 'lat', 'lon']),
+    )
+    pressure_1d = _p1d.values
+    altitude_1d = _z1d.values
     _stop()
 
     # -----------------------------------------------------------------------
@@ -492,13 +497,23 @@ with ds:
         zonal_fig_dir  = os.path.join(figures_dir, 'zonal')
 
         _stop = _tick("Zonal mean snapshots")
-        for var_cfg in config.ZONAL_VARS:
-            name = var_cfg['name']
-            if name not in ds.data_vars:
-                print(f"  WARNING: '{name}' not in dataset, skipping zonal mean.")
-                continue
+
+        # Collect lazy lon-means, then single dask pass for all zonal vars.
+        _zonal_valid = [v for v in config.ZONAL_VARS if v['name'] in ds.data_vars]
+        for name in [v['name'] for v in config.ZONAL_VARS if v['name'] not in ds.data_vars]:
+            print(f"  WARNING: '{name}' not in dataset, skipping zonal mean.")
+
+        _zonal_lazy = {v['name']: compute.preload_zonal_mean(ds, v['name'])
+                       for v in _zonal_valid}
+        _zonal_computed = dict(zip(
+            _zonal_lazy.keys(),
+            dask.compute(*_zonal_lazy.values()),
+        ))
+
+        for var_cfg in _zonal_valid:
+            name     = var_cfg['name']
             units    = ds[name].attrs.get('units', '')
-            zonal_np = compute.preload_zonal_mean(ds, name)   # one I/O pass per var
+            zonal_np = _zonal_computed[name].values   # already in memory
             for target_day in config.ZONAL_PERIODS:
                 data_2d, actual_day = compute.compute_zonal_mean(
                     days, float(target_day), zonal_np)

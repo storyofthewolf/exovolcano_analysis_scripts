@@ -299,14 +299,15 @@ def compute_profile(ds, geom, name):
 
 def preload_zonal_mean(ds, name):
     """
-    Load the full longitude-mean of variable name into memory as a numpy array.
-    Call this once per variable before looping over target days.
+    Return a lazy lon-mean DataArray for name.
+    Callers should batch multiple variables with dask.compute() before
+    accessing .values, to avoid one Lustre read pass per variable.
 
     Returns
     -------
-    np.ndarray (time, lev, lat)
+    xr.DataArray (time, lev, lat)  — lazy
     """
-    return ds[name].mean(dim='lon').values
+    return ds[name].mean(dim='lon')
 
 
 def compute_zonal_mean(days, target_day, zonal_np):
