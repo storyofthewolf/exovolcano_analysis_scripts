@@ -14,7 +14,7 @@ import datetime as _datetime
 _t_start_wall = _time.perf_counter()
 _t_start_dt   = _datetime.datetime.now()
 
-# --time and --no-* flags: strip all before config.py parses sys.argv
+# Parse all custom flags before config.py sees sys.argv
 _timing_enabled = '--time' in sys.argv
 if _timing_enabled:
     sys.argv.remove('--time')
@@ -23,6 +23,12 @@ _SKIP_FLAGS = {'--no-zonal', '--no-aod', '--no-profiles', '--no-scalars', '--no-
 _skips = _SKIP_FLAGS & set(sys.argv)
 for _f in _skips:
     sys.argv.remove(_f)
+
+_n_workers = 8
+if '--nthreads' in sys.argv:
+    _i = sys.argv.index('--nthreads')
+    _n_workers = int(sys.argv[_i + 1])
+    sys.argv[_i:_i + 2] = []
 
 _skip_scalars  = '--no-scalars'  in _skips
 _skip_profiles = '--no-profiles' in _skips
@@ -97,17 +103,19 @@ scalar_vars / profile_vars sections
 
 Runtime flags (can be combined)
 --------------------------------
-  --time         Print a per-section timing summary at the end.
-  --no-scalars   Skip scalar time series (computation + CSV output).
-  --no-profiles  Skip profile time series (computation + CSV output).
-  --no-plots     Skip all figure output (CSV data is still written).
-  --no-aod       Skip AOD calculation.
-  --no-zonal     Skip zonal mean snapshots (expensive on large datasets).
+  --time           Print a per-section timing summary at the end.
+  --nthreads N     Use N dask threads (default: 8). Increase on an allocated
+                   compute node; keep low (4-8) on a shared login node.
+  --no-scalars     Skip scalar time series (computation + CSV output).
+  --no-profiles    Skip profile time series (computation + CSV output).
+  --no-plots       Skip all figure output (CSV data is still written).
+  --no-aod         Skip AOD calculation.
+  --no-zonal       Skip zonal mean snapshots (expensive on large datasets).
 
 Example
 -------
     python run_time_series.py t1d_vei7.yaml
-    python run_time_series.py t1d_vei7.yaml --no-zonal --no-aod --time
+    python run_time_series.py t1d_vei7.yaml --nthreads 32 --no-zonal --time
 """)
     sys.exit(0)
 
@@ -123,11 +131,6 @@ import dask
 import dask.config
 import pandas as pd
 
-# Thread count for dask reductions.
-# Override with DASK_WORKERS=N in your environment.
-# On a shared login node, keep this low (4-8) to avoid contention with other
-# users. In a dedicated batch job, set it to your allocated core count.
-_n_workers = int(os.environ.get('DASK_WORKERS', min(8, os.cpu_count() or 4)))
 dask.config.set(scheduler='threads', num_workers=_n_workers)
 
 import config
@@ -138,7 +141,7 @@ import zonal_plots
 from zonal_plots import LOG_SCALE_DECADES
 
 print("\n!============= Running exovolcano time_series diagnostics =============!")
-print(f"Dask scheduler  : threaded  ({_n_workers} workers)")
+print(f"Dask scheduler  : threaded  ({_n_workers} threads)")
 if _skips:
     print(f"Skipping        : {' '.join(f.replace('--no-', '') for f in sorted(_skips))}")
 

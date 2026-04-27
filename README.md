@@ -30,6 +30,7 @@ Any combination of these flags can be appended to the command:
 | Flag | Effect |
 |------|--------|
 | `--time` | Print a per-section timing summary at the end |
+| `--nthreads N` | Use N dask threads (default: 8) |
 | `--no-scalars` | Skip scalar time series (computation + CSV) |
 | `--no-profiles` | Skip profile time series (computation + CSV) |
 | `--no-plots` | Skip all figure output (CSV data is still written) |
@@ -238,85 +239,19 @@ Kext   = Q_ext × 3 / (4 × r_eff_cm × ρ_bulk)   [cm²/g]
 
 This is useful for wavelengths outside the optics table or for sensitivity tests with different refractive indices.
 
----
-
 ## Running on an HPC cluster
 
-### Login node vs. batch job
-
-**Avoid running on the login node for full production runs.** Login nodes are shared across all users on the cluster. Running a compute-heavy script there means:
-
-- Your dask threads compete with other users' processes for CPU time, causing 2–4× run-to-run timing variance even with identical code and data.
-- Sustained CPU usage on a login node is against policy on most HPC systems (SLURM, PBS, LSF) and may result in your process being killed or your account flagged.
-- Lustre I/O from the login node is uncontested for bandwidth but the metadata server is shared — opening many files in parallel can degrade performance for other users.
-
-Use the login node only for quick tests (`--no-zonal --no-aod`) and for developing/debugging. Submit a batch job for full runs.
-
-### Controlling dask thread count
-
-The script uses a threaded dask scheduler. The number of workers defaults to `min(8, cpu_count)` but can be overridden with the `DASK_WORKERS` environment variable:
+The script uses a threaded dask scheduler. By default it uses 8 threads, which works well on both a laptop and an interactively-allocated compute node (`salloc`). Increase the thread count when you have more cores available:
 
 ```bash
-# Login node — keep low to avoid contention
-DASK_WORKERS=4 python run_time_series.py ben2_vei7.yaml --time
-
-# Batch job — set to your allocated core count
-DASK_WORKERS=32 python run_time_series.py ben2_vei7.yaml --time
-```
-
-### Example SLURM batch script
-
-Save as `submit_analysis.sh` and submit with `sbatch submit_analysis.sh`:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=exovol_analysis
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16       # dask threads — adjust to what you need
-#SBATCH --mem=64G                # set based on dataset size; 32–64 GB typical
-#SBATCH --time=01:00:00          # walltime limit
-#SBATCH --output=logs/%j_analysis.out
-#SBATCH --error=logs/%j_analysis.err
-
-# Activate your Python environment
-source activate exovol            # or: module load python; source /path/to/venv/bin/activate
-
-# Tell the script how many cores it has
-export DASK_WORKERS=$SLURM_CPUS_PER_TASK
-
-# Run the analysis
+# Default (8 threads)
 python run_time_series.py ben2_vei7.yaml --time
+
+# On an allocated compute node with more cores
+python run_time_series.py ben2_vei7.yaml --nthreads 32 --time
 ```
 
-Adjust `--cpus-per-task` and `--mem` to match your dataset. A 1000-timestep run at 96×144 grid with 5 scalar variables and 5 profile variables typically needs 32–64 GB and runs in under 60 s with 16 dedicated cores.
-
-### Example PBS/Torque batch script
-
-```bash
-#!/bin/bash
-#PBS -N exovol_analysis
-#PBS -l select=1:ncpus=16:mem=64gb
-#PBS -l walltime=01:00:00
-#PBS -o logs/analysis.out
-#PBS -e logs/analysis.err
-
-cd $PBS_O_WORKDIR
-source activate exovol
-
-export DASK_WORKERS=16
-python run_time_series.py ben2_vei7.yaml --time
-```
-
-### Quick interactive job (srun)
-
-For interactive testing with a dedicated core allocation:
-
-```bash
-srun --ntasks=1 --cpus-per-task=8 --mem=32G --time=00:30:00 --pty bash
-source activate exovol
-export DASK_WORKERS=8
-python run_time_series.py ben2_vei7.yaml --no-zonal --time
-```
+On the login node, keep threads low (4–8) — the login node is shared and higher thread counts cause contention with other users, making runs slower and more variable.
 
 ---
 
