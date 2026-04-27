@@ -56,7 +56,7 @@ The pipeline has six modules:
 - `compute_zonal_mean(days, target_day, zonal_np)` — slices a pre-loaded `(time, lev, lat)` numpy array; no I/O
 
 **`optics.py`** — Pure computation engine for aerosol optics; no plotting or I/O except `load_band_optics`. Key functions:
-- `load_band_optics(filepath)` — opens `haze_n68_b40_mie.nc`; `rbins` are stored in cm in that file and are converted to µm on load (`* 1e4`)
+- `load_band_optics(filepath)` — opens `volc_pw1975_n68_r1.0um_mie.nc`; `rbins` are stored in cm in that file and are converted to µm on load (`* 1e4`)
 - `select_band_550nm(wvn_centers)` — finds band index nearest to 18182 cm⁻¹
 - `interpolate_kext(optics, i_wave, reff_um)` — log-log interpolation of Kext over rbins
 - `mie_kext(wavelength_um, reff_um, ...)` — calls `miepython.efficiencies(m, diameter_um, wavelength_um)`; note this version of miepython uses diameter + wavelength in the same units, not the old size-parameter `mie(m, x)` API
@@ -112,7 +112,7 @@ zonal_mean_periods:             # both sections required to enable zonal output
   increment: [0, 1, 4, 10, 50, 100]   # days since start
 
 # AOD — omit optics_file (or set to null) to skip the entire AOD section
-optics_file: '/path/to/haze_n68_b40_mie.nc'
+optics_file: '/path/to/volc_pw1975_n68_r1.0um_mie.nc'
 volc_reff:   1.0                # effective particle radius [µm]
 rho_aerosol: 1.84               # bulk aerosol density [g/cm³]
 # mie_wavelength_um:         0.55   # optional; requires miepython
@@ -151,5 +151,5 @@ Profile CSVs write pressure and altitude coordinates as `# pressure_Pa:` and `# 
 - **Lazy geometry**: All 4D geometry fields returned by `compute_geometry()` are dask-backed DataArrays. Downstream reductions in `compute_scalar()` and `compute_profile()` are also lazy; the orchestrator triggers computation via batched `dask.compute()` calls.
 - **Profile Hovmoller plots and zonal mean plots**: log-pressure y-axis, surface at bottom. Variables in `LOG_SCALE_DECADES` (SO2, H2SO4, Q, VOLCHZMD) use `LogNorm` colormaps anchored at the data peak; others use linear with 2nd–98th percentile clipping. `LOG_SCALE_DECADES` is defined in `zonal_plots.py` and imported by `run_time_series.py` — do not define it in both places.
 - **Experiment name** is the YAML filename stem (`_config_path` in `config.py`), not the `file_pattern` prefix. `get_experiment_name()` uses `os.path.splitext(os.path.basename(_config_path))[0]`.
-- **`rbins` unit bug in optics file**: `haze_n68_b40_mie.nc` labels `rbins` as microns but the values are in centimetres. `load_band_optics` applies `* 1e4` on load to correct this.
+- **`rbins` unit bug in optics file**: `volc_pw1975_n68_r1.0um_mie.nc` labels `rbins` as microns but the values are in centimetres. `load_band_optics` applies `* 1e4` on load to correct this.
 - **miepython API**: The installed version uses `miepython.efficiencies(m, diameter, wavelength)` with both lengths in the same units. The old `miepython.mie(m, x)` size-parameter API does not exist in this version.

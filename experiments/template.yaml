@@ -140,10 +140,10 @@ volc_reff: 1.0
 # Default: 1.84
 rho_aerosol: 1.84
 
-# Path to the pre-computed Mie optics NetCDF file (haze_n68_b40_mie.nc).
+# Path to the pre-computed Mie optics NetCDF file (volc_pw1975_n68_r1.0um_mie.nc).
 # Set this to the actual path on your system to enable AOD output.
 # Omit this key (or set to null) to skip all AOD calculations.
-optics_file: '/path/to/haze_n68_b40_mie.nc'
+optics_file: '/path/to/volc_pw1975_n68_r1.0um_mie.nc'
 
 # ---------------------------------------------------------------------------
 # Optional: single-wavelength Mie AOD at a custom wavelength

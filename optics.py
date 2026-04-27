@@ -21,42 +21,45 @@ import xarray as xr
 
 def load_band_optics(filepath):
     """
-    Open haze_n68_b40_mie.nc and return a dict of numpy arrays.
+    Open volc_pw1975_n68_r1.0um_mie.nc and return a dict of numpy arrays.
+
+    NOTE: Currently only supports optics files with nbins=1 (single particle
+    radius). Multi-bin files will load without error but interpolation over
+    rbins has not been validated — additional work would be needed to support
+    multiple radii.
 
     Returns
     -------
     dict with keys:
         wvnrng      : (69,)    wavenumber edges [cm⁻¹]
         wvn_centers : (68,)    midpoints of adjacent wvnrng edges [cm⁻¹]
-        rbins       : (40,)    particle radii from rbins[:, 0] [microns]
-        Kext        : (68, 40) extinction efficiency [cm²/g]
-        W           : (68, 40) single scattering albedo
-        G           : (68, 40) asymmetry parameter
+        rbins       : (nbins,) particle radii [cm] as stored in the file
+        Kext        : (68, nbins) extinction efficiency [cm²/g]
+        W           : (68, nbins) single scattering albedo
+        G           : (68, nbins) asymmetry parameter
     """
     with xr.open_dataset(filepath, engine='netcdf4') as ds:
         wvnrng      = ds['wvnrng'].values.ravel()           # (69,)
         wvn_centers = 0.5 * (wvnrng[:-1] + wvnrng[1:])     # (68,)
-        rbins       = ds['rbins'].values[:, 0] #* 1e4           # cm -> µm
-        Kext        = ds['Kext'].values[:, :, 0]             # (68, 40)
-        W           = ds['W'].values[:, :, 0]                # (68, 40)
-        G           = ds['G'].values[:, :, 0]                # (68, 40)
+        rbins       = ds['rbins'].values[:, 0]              # (nbins,) in cm
+        kext_raw    = ds['Kext'].values[:, :, 0]            # (68, nbins)
+        kext_units  = ds['Kext'].attrs.get('units', '').strip()
+        W           = ds['W'].values[:, :, 0]               # (68, nbins)
+        G           = ds['G'].values[:, :, 0]               # (68, nbins)
 
-    kext_raw   = ds['Kext'].values[:, :, 0]          # (68, nbins)
-    kext_units = ds['Kext'].attrs.get('units', '').strip()
     if kext_units in ('m2 kg-1', 'm2/kg', 'm^2/kg', 'm2 kg^-1'):
-
         print("-- SI units detected in optpropt file --")
-        print("-- convert to cgs for calculation (x10) --") 
-        kext_cgs = kext_raw * 10.0                     # m²/kg -> cm²/g
+        print("-- convert to cgs for calculation (x10) --")
+        kext_cgs = kext_raw * 10.0                          # m²/kg -> cm²/g
     else:
         print(" CGS units detected in optpropt file ")
-        kext_cgs = kext_raw                           # assume already cm²/g
-        
+        kext_cgs = kext_raw                                 # already cm²/g
+
     return {
         'wvnrng':      wvnrng,
         'wvn_centers': wvn_centers,
-        'rbins':       rbins,
-        'Kext':        kext_cgs,
+        'rbins':       rbins,       # cm (as stored in file)
+        'Kext':        kext_cgs,    # cm²/g
         'W':           W,
         'G':           G,
     }
@@ -89,14 +92,19 @@ def select_band_550nm(wvn_centers):
 
 def interpolate_kext(optics, i_wave, reff_um):
     """
-    Interpolate Kext[i_wave, :] over rbins at reff_um using log-log
-    interpolation.
+    Return Kext [cm²/g] for wavelength band i_wave.
+
+    NOTE: Only nbins=1 optics files are currently supported. For single-bin
+    files, reff_um is not used in the lookup — Kext is read directly from the
+    one available bin. Multi-bin interpolation (log-log over rbins) is
+    implemented below but has not been validated; supporting it properly would
+    require confirming rbins units and testing against known references.
 
     Parameters
     ----------
     optics   : dict from load_band_optics()
     i_wave   : int   wavelength band index
-    reff_um  : float effective radius [microns]
+    reff_um  : float effective radius [microns] (unused for nbins=1)
 
     Returns
     -------
@@ -104,27 +112,22 @@ def interpolate_kext(optics, i_wave, reff_um):
 
     Raises
     ------
-    ValueError if reff_um is outside the range of rbins.
+    ValueError if reff_um is outside the range of rbins (multi-bin only).
     """
     rbins = optics['rbins']
     kext  = optics['Kext'][i_wave, :]
 
-    r_min, r_max = rbins.min(), rbins.max()
-
-    # Use relative tolerance for the bounds check to handle float precision.
-    # Also handle nbins=1 where min==max: warn if reff differs by more than 1%
-    # but proceed anyway since there is no interpolation to do.
-    rtol = 0.01
     if len(rbins) == 1:
-        if abs(reff_um - rbins[0]) / rbins[0] > rtol:
-            print(f"  WARNING: reff_um={reff_um} differs from single bin "
-                  f"radius={rbins[0]:.4f} um by more than {rtol*100:.0f}%.")
-    else:
-        if reff_um < r_min * (1 - rtol) or reff_um > r_max * (1 + rtol):
-            raise ValueError(
-                f"reff_um={reff_um} is outside the optics table range "
-                f"[{r_min:.4f}, {r_max:.4f}] microns."
-            )
+        # Single-bin file: radius is not a free parameter; return directly.
+        return float(kext[0])
+
+    r_min, r_max = rbins.min(), rbins.max()
+    rtol = 0.01
+    if reff_um < r_min * (1 - rtol) or reff_um > r_max * (1 + rtol):
+        raise ValueError(
+            f"reff_um={reff_um} is outside the optics table range "
+            f"[{r_min:.4f}, {r_max:.4f}] (file units)."
+        )
 
     log_r    = np.log(rbins)
     log_kext = np.log(kext)

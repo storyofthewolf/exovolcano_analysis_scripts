@@ -164,7 +164,7 @@ AOD requires VOLCHZMD in the CAM output. **All AOD settings are in the same expe
 
 ```yaml
 # Required to enable AOD:
-optics_file: '/path/to/haze_n68_b40_mie.nc'   # pre-computed Mie optics table
+optics_file: '/path/to/volc_pw1975_n68_r1.0um_mie.nc'   # pre-computed Mie optics table
 
 # Optional tuning (defaults shown):
 volc_reff:   1.0    # effective particle radius [µm] for Kext lookup/Mie
@@ -243,7 +243,9 @@ AOD_column = Σ AOD_layer  (sum over lev)
 
 ### Band-interpolated Kext (default)
 
-The optics file `haze_n68_b40_mie.nc` contains pre-computed Mie extinction efficiencies on a grid of 68 wavenumber bands × 40 particle radii. The 550 nm band is found by locating the band center nearest to 18182 cm⁻¹. Kext is then interpolated to `volc_reff` using log-log interpolation over the radius axis.
+The optics file `volc_pw1975_n68_r1.0um_mie.nc` contains pre-computed Mie extinction efficiencies on a grid of 68 wavenumber bands × N particle radii. The 550 nm band is found by locating the band center nearest to 18182 cm⁻¹.
+
+**Current limitation: only single-radius optics files (nbins=1) are supported.** For nbins=1, `volc_reff` is not used in the band Kext lookup — Kext is read directly from the single available bin. Supporting multi-bin files would require validating the `rbins` units in the file and testing log-log interpolation against known references.
 
 ### Single-wavelength Mie Kext (optional)
 

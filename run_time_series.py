@@ -74,7 +74,7 @@ Optional YAML keys (defaults in parentheses)
 --------------------------------------------
   figures_dir   Root directory for PNG output  ('figures').
   data_dir      Root directory for CSV output  ('data').
-  optics_file   Path to haze_n68_b40_mie.nc.  Set this to enable AOD
+  optics_file   Path to volc_pw1975_n68_r1.0um_mie.nc.  Set this to enable AOD
                 calculations; omit or set to null to skip AOD entirely.
   volc_reff     Effective particle radius [µm] for Kext lookup  (1.0).
   rho_aerosol   Bulk aerosol density [g/cm³], used by Mie path  (1.84).
