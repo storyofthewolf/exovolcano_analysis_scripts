@@ -1,6 +1,6 @@
 # Batch: Hunga Tonga eruption sensitivity suite, phase 2 — modern Earth.
 #
-# 8 cases extending the phase-1 suite (exovolc_hunga.yaml, 20 cases) along the
+# 9 cases extending the phase-1 suite (exovolc_hunga.yaml, 20 cases) along the
 # axes that phase 1 could not reach. Split out to match the run-side split into
 # ../description_paper/experiment_yamls/hungatonga_phase2.yaml, which is the
 # authoritative record of what was actually run. Every diagnostic, planetary
@@ -12,6 +12,7 @@
 #   k8d               fast-conversion end of the SO2 -> H2SO4 lifetime axis
 #   r0.4*             observed Hunga effective radius (SAGE III/ISS, CALIOP)
 #   raikoke_equiv     1.5 Tg control against Schoeberl (2023) Table 1
+#   control           no-eruption baseline; zero SO2 and zero H2O injected
 #
 # Base configuration, eruption location, plume width, and duration are the same
 # as phase 1; see hungatonga_phase2.yaml for the per-case scientific rationale.
@@ -117,6 +118,14 @@ cases:
   - name: exovolc_hunga_r0.4_so2_1.0tg
     optics_file: 'data/optprops/volc_pw1975_n68_r0.4um_mie.nc'
     volc_reff:   0.4
+
+  # --- No-eruption control ---
+  # volc_emis_so2_total = 0.0 and volc_emis_h2o_total = 0.0: nothing is injected
+  # at all. This is the unperturbed baseline the whole suite is differenced
+  # against, not a small-eruption case like raikoke_equiv below. Every volcanic
+  # diagnostic (SO2, H2SO4, VOLCHZMD, and therefore AOD) is zero by
+  # construction — that is the expected result, not a failed run.
+  - name: exovolc_hunga_control
 
   # --- Raikoke-equivalent control ---
   # Schoeberl et al. (2023) Table 1 puts Raikoke 2019 at 0.016 global-mean
