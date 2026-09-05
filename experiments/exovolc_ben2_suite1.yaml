@@ -1,0 +1,90 @@
+# Batch: ben2 eruption suite — pure-CO2 TRAPPIST-1e THAI atmosphere.
+#
+# 14 cases: control + Tambora/Hunga/Pinatubo-analog eruptions (day and
+# tidally-locked night injection points), plus Tambora/Hunga 10x and 100x
+# magnitude rungs and the Tambora K/scrit sensitivity variants.
+#
+# This suite exists because of a compilation audit: all 56 cases across the
+# ben1/ben2/hab1/hab2 TRAPPIST-1e suites were found to share the SAME
+# exoplanet_mod.F90, compiled pure CO2 (co2bar=1.0, n2bar=0.0). ben2 and hab2
+# were SUPPOSED to be 1 bar pure CO2, so those 28 cases are valid as run and
+# are what this batch (and its hab2 sibling) condense. ben1 and hab1 were
+# supposed to be 1 bar N2 + 400 ppm CO2 but were built with the same pure-CO2
+# module; those 28 cases are INVALID and are excluded here — they are being
+# rerun separately and must not be referenced from this batch or its output.
+
+root_dir: '/gpfsm/dnb33/etwolf/cesm_scratch/archive/'
+
+# Standard CESM archive layout, so folder_template / file_template are left at
+# their defaults ('{case}/atm/hist' and '{case}.cam.h1.*.nc'). History files are
+# globbed — no need to enumerate them.
+
+# --- Planet: TRAPPIST-1e, pure CO2 THAI atmosphere (verified against
+# exoplanet_mod.F90 as actually compiled for ben2/hab2, not the stale
+# exovolc_ben.yaml/exovolc_hab.yaml constants in this repo) ---
+g_const: 9.1233        # exo_surface_gravity (m/s^2)
+r_air:   188.924269    # R/mw, pure CO2, mw=44.0095 (J/kg/K)
+r_earth: 5797810.2     # exo_planet_radius (m)
+
+figures_dir: 'figures'
+data_dir:    'data'
+
+scalar_vars:
+  - name: SO2
+    method: mass_integral
+  - name: H2SO4
+    method: mass_integral
+  - name: VOLCHZMD
+    method: volume_integral
+  - name: Q
+    method: mass_integral
+  - name: TS
+    method: area_mean
+  - name: TGCLDLWP
+    method: area_mean
+  - name: TMQ
+    method: area_mean
+
+profile_vars:
+  - name: T
+    method: area_mean
+  - name: SO2
+    method: area_mean
+  - name: H2SO4
+    method: area_mean
+  - name: Q
+    method: area_mean
+  - name: VOLCHZMD
+    method: area_mean
+
+zonal_mean_vars:
+  - name: T
+  - name: SO2
+  - name: H2SO4
+  - name: VOLCHZMD
+
+zonal_mean_periods:
+  increment: [0, 1, 4, 10, 50, 100]   # days since start
+
+# --- Aerosol optics ---
+# All 14 cases ran with carma_volc_reff = 0.5 um, so the batch default covers
+# every case with no per-case override needed.
+optics_file: 'data/optprops/volc_pw1975_n68_r0.5um_mie.nc'
+volc_reff:   0.5
+rho_aerosol: 1.84
+
+cases:
+  - name: exovolc_ben2_control
+  - name: exovolc_ben2_tambora
+  - name: exovolc_ben2_hunga
+  - name: exovolc_ben2_pinatubo
+  - name: exovolc_ben2_tambora_night
+  - name: exovolc_ben2_hunga_night
+  - name: exovolc_ben2_pinatubo_night
+  - name: exovolc_ben2_tambora_10x
+  - name: exovolc_ben2_tambora_100x
+  - name: exovolc_ben2_hunga_10x
+  - name: exovolc_ben2_hunga_100x
+  - name: exovolc_ben2_tambora_k2.5
+  - name: exovolc_ben2_tambora_k250
+  - name: exovolc_ben2_tambora_scrit5
